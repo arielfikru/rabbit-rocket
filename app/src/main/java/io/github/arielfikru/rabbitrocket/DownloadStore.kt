@@ -18,12 +18,18 @@ enum class Status(val label: String) {
     Merging("GABUNG"),
     Converting("KONVERSI"),
     Saving("SIMPAN"),
+    /** Between automatic retries: counting down, or waiting for the internet to come back. */
+    Retrying("ULANG"),
+    Paused("JEDA"),
     Done("SELESAI"),
     Failed("GAGAL"),
     Canceled("BATAL");
 
     val isActive get() = this == Downloading || this == Merging || this == Converting || this == Saving
-    val isWaiting get() = this == Queued || isActive
+    val isWaiting get() = this == Queued || this == Retrying || isActive
+
+    /** Kept in history.json: finished files, and paused jobs so they can be continued after a restart. */
+    val isKept get() = this == Done || this == Paused
 }
 
 data class DlJob(
@@ -49,6 +55,15 @@ data class DlJob(
     val fileName: String? = null,
     val size: Long = 0,
     val error: String? = null,
+    /** Finished files: poster jpeg path ("" = tried, none), plus what the file itself reports. */
+    val thumb: String? = null,
+    val durationSec: Double = 0.0,
+    val width: Int = 0,
+    val height: Int = 0,
+    /** Automatic retries used so far, and the countdown to the next one. */
+    val attempt: Int = 0,
+    val retryIn: Int = 0,
+    val waitingNet: Boolean = false,
 ) {
     fun headers(): Map<String, String> = buildMap {
         put("User-Agent", userAgent?.takeIf { it.isNotBlank() } ?: DEFAULT_UA)
@@ -80,7 +95,7 @@ data class DlJob(
     /** Whole-job progress: downloading is 0–85%, merging/converting/saving fill the rest. */
     val overall: Float
         get() = when (status) {
-            Status.Queued, Status.Failed, Status.Canceled -> downloadFraction * downloadShare
+            Status.Queued, Status.Failed, Status.Canceled, Status.Paused, Status.Retrying -> downloadFraction * downloadShare
             Status.Downloading -> downloadFraction * downloadShare
             Status.Merging -> 0.87f
             Status.Converting -> 0.88f + convertProgress / 100f * 0.1f
@@ -109,11 +124,19 @@ object DownloadStore {
             val arr = JSONArray(f.readText())
             (0 until arr.length()).map { i ->
                 val o = arr.getJSONObject(i)
+                fun str(k: String) = o.optString(k).takeIf { o.has(k) && !o.isNull(k) }
+                val paused = o.optString("status") == Status.Paused.name
                 DlJob(
                     id = o.getLong("id"), name = o.getString("name"), url = o.getString("url"),
-                    referer = null, userAgent = null, toMp4 = false, direct = o.optBoolean("direct"),
-                    status = Status.Done, outputUri = o.getString("uri"), outputMime = o.optString("mime"),
-                    fileName = o.optString("file"), size = o.optLong("size"),
+                    referer = str("referer"), userAgent = str("ua"), toMp4 = o.optBoolean("toMp4"),
+                    direct = o.optBoolean("direct"), cookie = str("cookie"),
+                    status = if (paused) Status.Paused else Status.Done,
+                    done = o.optInt("done"), total = o.optInt("total"),
+                    bytes = o.optLong("bytes"), totalBytes = o.optLong("totalBytes"),
+                    outputUri = str("uri"), outputMime = str("mime"),
+                    fileName = str("file"), size = o.optLong("size"),
+                    thumb = str("thumb"), durationSec = o.optDouble("dur", 0.0),
+                    width = o.optInt("w"), height = o.optInt("h"),
                 )
             }
         }.getOrDefault(emptyList())
@@ -125,23 +148,29 @@ object DownloadStore {
     fun add(job: DlJob) = _jobs.update { it + job }
 
     fun remove(id: Long) {
-        val wasDone = get(id)?.status == Status.Done
+        val kept = get(id)?.status?.isKept == true
         _jobs.update { list -> list.filterNot { it.id == id } }
-        if (wasDone) saveHistory()
+        if (kept) saveHistory()
     }
 
     fun update(id: Long, f: (DlJob) -> DlJob) {
+        val before = get(id)
         _jobs.update { list -> list.map { if (it.id == id) f(it) else it } }
-        if (get(id)?.status == Status.Done) saveHistory()
+        val after = get(id)
+        if (before != after && (before?.status?.isKept == true || after?.status?.isKept == true)) saveHistory()
     }
 
     private fun saveHistory() {
         val f = history ?: return
         val arr = JSONArray()
-        _jobs.value.filter { it.status == Status.Done && it.outputUri != null }.forEach { j ->
+        _jobs.value.filter { (it.status == Status.Done && it.outputUri != null) || it.status == Status.Paused }.forEach { j ->
             arr.put(
                 JSONObject().put("id", j.id).put("name", j.name).put("url", j.url).put("direct", j.direct)
-                    .put("uri", j.outputUri).put("mime", j.outputMime).put("file", j.fileName).put("size", j.size),
+                    .put("status", j.status.name)
+                    .put("referer", j.referer).put("ua", j.userAgent).put("cookie", j.cookie).put("toMp4", j.toMp4)
+                    .put("done", j.done).put("total", j.total).put("bytes", j.bytes).put("totalBytes", j.totalBytes)
+                    .put("uri", j.outputUri).put("mime", j.outputMime).put("file", j.fileName).put("size", j.size)
+                    .put("thumb", j.thumb).put("dur", j.durationSec).put("w", j.width).put("h", j.height),
             )
         }
         synchronized(this) { File(f.parentFile, "history.tmp").apply { writeText(arr.toString()); renameTo(f) } }

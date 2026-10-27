@@ -140,6 +140,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import io.github.arielfikru.rabbitrocket.DlJob
+import io.github.arielfikru.rabbitrocket.JobFrames
 import io.github.arielfikru.rabbitrocket.Media
 import io.github.arielfikru.rabbitrocket.PlayerActivity
 import io.github.arielfikru.rabbitrocket.R
@@ -397,6 +398,20 @@ private fun PreviewCard(p: Preview, vm: MainViewModel) {
     val player = rememberPreviewPlayer(p.streamUrl, headers, hls = !p.isDirect)
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
+    var viewing by remember { mutableStateOf<Int?>(null) }
+    viewing?.let { slot ->
+        val sorted = vm.thumbs.sortedBy { it.slot }
+        FrameViewer(
+            frames = sorted.map { t -> ViewerFrame(t.timeSec) { t.bitmap.asImageBitmap() } },
+            start = sorted.indexOfFirst { it.slot == slot },
+            onPlay = { t ->
+                viewing = null
+                player.player.seekTo((t * 1000).toLong())
+                player.player.play()
+            },
+            onDismiss = { viewing = null },
+        )
+    }
 
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(RR.OrbitDeck).padding(16.dp),
@@ -415,10 +430,7 @@ private fun PreviewCard(p: Preview, vm: MainViewModel) {
         if (p.variants.size > 1) Stagger(shown, 3) { QualityPicker(p, vm::select) }
         if (vm.thumbSlots > 0) {
             Stagger(shown, 4) {
-                ThumbGrid(vm.thumbs, vm.thumbSlots) { t ->
-                    player.player.seekTo((t * 1000).toLong())
-                    player.player.play()
-                }
+                ThumbGrid(vm.thumbs, vm.thumbSlots) { slot -> viewing = slot }
             }
         }
         Stagger(shown, 5) {
@@ -544,12 +556,12 @@ private fun QualityPill(text: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ThumbGrid(thumbs: List<Thumbnails.Thumb>, slots: Int, onSeek: (Double) -> Unit) {
+internal fun ThumbGrid(thumbs: List<Thumbnails.Thumb>, slots: Int, onOpen: (Int) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         (0 until slots).chunked(3).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 row.forEach { slot ->
-                    ThumbTile(thumbs.firstOrNull { it.slot == slot }, Modifier.weight(1f), onSeek)
+                    ThumbTile(thumbs.firstOrNull { it.slot == slot }, Modifier.weight(1f), onOpen)
                 }
                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
@@ -558,7 +570,7 @@ private fun ThumbGrid(thumbs: List<Thumbnails.Thumb>, slots: Int, onSeek: (Doubl
 }
 
 @Composable
-private fun ThumbTile(thumb: Thumbnails.Thumb?, modifier: Modifier, onSeek: (Double) -> Unit) {
+private fun ThumbTile(thumb: Thumbnails.Thumb?, modifier: Modifier, onOpen: (Int) -> Unit) {
     Box(modifier.aspectRatio(16f / 9f).clip(RoundedCornerShape(10.dp)).background(RR.NightSky)) {
         if (thumb == null) {
             val pulse by rememberInfiniteTransition("wait").animateFloat(
@@ -581,7 +593,7 @@ private fun ThumbTile(thumb: Thumbnails.Thumb?, modifier: Modifier, onSeek: (Dou
                         scaleX = s
                         scaleY = s
                     }
-                    .clickable(onClickLabel = "Putar dari sini") { onSeek(thumb.timeSec) },
+                    .clickable(onClickLabel = "Lihat lebih besar") { onOpen(thumb.slot) },
             )
             Text(
                 fmtDuration(thumb.timeSec),
@@ -614,6 +626,8 @@ private fun SectionRow(jobs: List<DlJob>, vm: MainViewModel, modifier: Modifier)
 @Composable
 private fun JobCard(job: DlJob, vm: MainViewModel, modifier: Modifier) {
     var renaming by remember(job.id) { mutableStateOf(false) }
+    var sheet by remember(job.id) { mutableStateOf(false) }
+    if (sheet) JobSheet(job, vm) { sheet = false }
     Column(
         modifier.fillMaxWidth()
             .animateContentSize(tween(300, easing = ExpoOut))
@@ -622,8 +636,9 @@ private fun JobCard(job: DlJob, vm: MainViewModel, modifier: Modifier) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            StatusDot(job)
+        val done = job.status == Status.Done
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(if (done) 12.dp else 14.dp)) {
+            if (done) JobPoster(job, vm) { sheet = true } else StatusDot(job)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(job.name, style = Type.strong, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
@@ -642,15 +657,110 @@ private fun JobCard(job: DlJob, vm: MainViewModel, modifier: Modifier) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Pill(chipText(job), RR.NightSky, RR.Pink)
+            // The poster's check mark already says "done"; the name gets the room instead.
+            if (!done) Pill(chipText(job), RR.NightSky, RR.Pink)
         }
-        if (job.status.isActive || (job.hasPartial && job.status != Status.Done)) {
+        if (job.status.isActive || job.status == Status.Retrying || (job.hasPartial && job.status != Status.Done)) {
             FlameBar(job.overall, job.isIndeterminate && job.status.isActive)
         }
         if (renaming) RenameRow(job.name, onCancel = { renaming = false }) {
             vm.renameJob(job, it)
             renaming = false
         } else Actions(job, vm)
+    }
+}
+
+/** Poster of a finished file; opens its 9-frame sheet. */
+@Composable
+private fun JobPoster(job: DlJob, vm: MainViewModel, onOpen: () -> Unit) {
+    LaunchedEffect(job.id, job.thumb) { if (job.thumb == null) vm.ensurePoster(job.id) }
+    val image by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, job.thumb) {
+        value = job.thumb?.takeIf { it.isNotEmpty() }?.let { path ->
+            withContext(Dispatchers.IO) { JobFrames.decode(java.io.File(path), 480)?.asImageBitmap() }
+        }
+    }
+    val shown by animateFloatAsState(if (image != null) 1f else 0f, tween(320, easing = ExpoOut), label = "poster")
+    Box(
+        Modifier.size(104.dp, 58.dp).clip(RoundedCornerShape(12.dp)).background(RR.NightSky)
+            .clickable(role = Role.Button, onClickLabel = "Lihat 9 cuplikan", onClick = onOpen),
+    ) {
+        image?.let {
+            Image(
+                it, null, contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = shown; val s = 1.06f - 0.06f * shown; scaleX = s; scaleY = s },
+            )
+        }
+        Box(
+            Modifier.align(Alignment.TopStart).padding(4.dp).size(18.dp).clip(CircleShape).background(RR.Flame),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Default.Check, null, tint = RR.NightSky, modifier = Modifier.size(12.dp))
+        }
+        if (job.durationSec > 0) {
+            Text(
+                fmtDuration(job.durationSec),
+                style = Type.small.copy(fontSize = 11.sp, color = RR.Cream),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
+                    .clip(RoundedCornerShape(6.dp)).background(RR.NightSky.copy(alpha = 0.8f))
+                    .padding(horizontal = 5.dp, vertical = 1.dp),
+            )
+        }
+    }
+}
+
+/** 3×3 frames of a finished file, read from the saved video on demand; tap one to see it big. */
+@Composable
+private fun JobSheet(job: DlJob, vm: MainViewModel, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val frames by produceState<List<Pair<Double, java.io.File>>?>(null, job.id) { value = vm.frameSheet(job) }
+    // Small copies for the tiles; the viewer decodes the full jpeg of the page it shows.
+    val tiles by produceState(emptyList<Thumbnails.Thumb>(), frames) {
+        value = frames.orEmpty().mapIndexedNotNull { i, (t, f) ->
+            withContext(Dispatchers.IO) { JobFrames.decode(f, 400) }?.let { Thumbnails.Thumb(i, t, it) }
+        }
+    }
+    var viewing by remember { mutableStateOf<Int?>(null) }
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(16.dp).clip(RoundedCornerShape(24.dp)).background(RR.OrbitDeck).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(job.name, style = Type.section, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Tutup", tint = RR.Muted) }
+            }
+            ThumbGrid(tiles, if (frames?.isEmpty() == true) 0 else Thumbnails.COUNT) { viewing = it }
+            Text(
+                when {
+                    frames == null -> "Mengambil cuplikan dari file…"
+                    frames!!.isEmpty() -> "Cuplikan tidak bisa dibaca dari file ini."
+                    else -> "Tap cuplikan untuk melihat lebih jelas."
+                },
+                style = Type.small,
+            )
+        }
+    }
+    val list = frames
+    val i = viewing
+    if (list != null && i != null) {
+        FrameViewer(
+            frames = list.map { (t, f) ->
+                ViewerFrame(t) { withContext(Dispatchers.IO) { JobFrames.decode(f)?.asImageBitmap() } }
+            },
+            start = i,
+            onPlay = { t ->
+                val uri = job.outputUri?.let(Uri::parse)
+                if (uri != null) {
+                    ctx.startActivity(PlayerActivity.intent(ctx, uri, job.outputMime, job.name, (t * 1000).toLong()))
+                }
+                viewing = null
+                onDismiss()
+            },
+            onDismiss = { viewing = null },
+        )
     }
 }
 
@@ -788,6 +898,15 @@ private fun Actions(job: DlJob, vm: MainViewModel) {
             Status.Failed, Status.Canceled -> {
                 SmallButton("Hapus", RR.NightSky, RR.Muted) { vm.remove(job.id) }
                 SmallButton(if (job.hasPartial) "Lanjutkan" else "Ulangi", RR.Flame, RR.NightSky) { vm.retry(job.id) }
+            }
+            Status.Paused -> {
+                SmallButton("Batal", RR.NightSky, RR.Muted) { vm.cancel(job.id) }
+                SmallButton("Lanjutkan", RR.Flame, RR.NightSky) { vm.retry(job.id) }
+            }
+            // Jeda only before the file is being put together; after that it is nearly done anyway.
+            Status.Queued, Status.Downloading, Status.Retrying -> {
+                SmallButton("Batal", RR.NightSky, RR.Muted) { vm.cancel(job.id) }
+                SmallButton("Jeda", RR.Violet, RR.Cream) { vm.pause(job.id) }
             }
             else -> SmallButton("Batal", RR.NightSky, RR.Cream) { vm.cancel(job.id) }
         }

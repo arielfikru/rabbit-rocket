@@ -26,13 +26,22 @@ fun statusLine(job: DlJob): String = when (job.status) {
     Status.Merging -> "menggabungkan ${job.total} segmen"
     Status.Converting -> "konversi ke MP4 · ${job.convertProgress}%"
     Status.Saving -> "menyimpan ke ${Storage.displayPath}"
-    Status.Done -> "${fmtBytes(job.size)} · ${Storage.displayPath}"
-    Status.Failed -> job.error ?: "gagal"
-    Status.Canceled -> when {
-        !job.hasPartial -> "dibatalkan"
-        job.direct -> "${fmtBytes(job.bytes)} tersimpan · bisa dilanjutkan"
-        else -> "${job.done}/${job.total} seg tersimpan · bisa dilanjutkan"
+    Status.Done -> listOfNotNull(
+        job.width.takeIf { it > 0 }?.let { "${minOf(job.width, job.height)}p" },
+        job.durationSec.takeIf { it > 0 }?.let(::fmtDuration),
+        fmtBytes(job.size),
+        Storage.displayPath,
+    ).joinToString(" · ")
+    Status.Retrying -> if (job.waitingNet) "${job.error ?: "Koneksi putus"} · menunggu internet"
+    else "${job.error ?: "Koneksi putus"} · coba lagi ${job.attempt}/3 dalam ${job.retryIn} dtk"
+    Status.Paused -> "dijeda · " + when {
+        job.direct && job.totalBytes > 0 -> "${fmtBytes(job.bytes)} / ${fmtBytes(job.totalBytes)}"
+        job.direct -> fmtBytes(job.bytes)
+        job.total > 0 -> "${job.done}/${job.total} seg"
+        else -> "belum ada yang terunduh"
     }
+    Status.Failed -> job.error ?: "gagal"
+    Status.Canceled -> "dibatalkan"
 }
 
 /** "1080p · 1920×1080"; the short side names the class, so portrait clips read right too. */

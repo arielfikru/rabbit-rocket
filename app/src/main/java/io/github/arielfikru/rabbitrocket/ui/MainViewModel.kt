@@ -13,6 +13,8 @@ import io.github.arielfikru.rabbitrocket.DlJob
 import io.github.arielfikru.rabbitrocket.DownloadEngine
 import io.github.arielfikru.rabbitrocket.DownloadService
 import io.github.arielfikru.rabbitrocket.DownloadStore
+import io.github.arielfikru.rabbitrocket.JobFrames
+import io.github.arielfikru.rabbitrocket.Notifs
 import io.github.arielfikru.rabbitrocket.Status
 import io.github.arielfikru.rabbitrocket.hls.HlsClient
 import io.github.arielfikru.rabbitrocket.hls.MediaKind
@@ -300,17 +302,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         getApplication<Application>().startService(DownloadService.cancelIntent(getApplication(), id))
     }
 
+    fun pause(id: Long) {
+        getApplication<Application>().startService(DownloadService.pauseIntent(getApplication(), id))
+    }
+
+    /** Lanjutkan / Ulangi; the service moves the job back to the queue. */
     fun retry(id: Long) {
         val job = DownloadStore.get(id) ?: return
-        if (job.status != Status.Failed && job.status != Status.Canceled) return
-        DownloadStore.update(id) { it.copy(status = Status.Queued, error = null) }
+        if (job.status != Status.Failed && job.status != Status.Canceled && job.status != Status.Paused) return
         DownloadService.start(getApplication(), id)
     }
 
     fun remove(id: Long) {
         DownloadStore.remove(id)
-        viewModelScope.launch(Dispatchers.IO) { DownloadEngine.workDir(getApplication(), id).deleteRecursively() }
+        Notifs.cancelResult(getApplication(), id)
+        viewModelScope.launch(Dispatchers.IO) {
+            DownloadEngine.workDir(getApplication(), id).deleteRecursively()
+            JobFrames.delete(getApplication(), id)
+        }
     }
+
+    /** Old history entries get their poster the first time their card shows. */
+    fun ensurePoster(id: Long) {
+        viewModelScope.launch { JobFrames.ensurePoster(getApplication(), id) }
+    }
+
+    suspend fun frameSheet(job: DlJob) = JobFrames.sheet(getApplication(), job)
 
     /** Drops a finished job from the list, and optionally the saved file with it. */
     fun deleteJob(job: DlJob, withFile: Boolean) {

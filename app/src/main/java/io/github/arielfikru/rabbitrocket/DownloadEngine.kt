@@ -2,6 +2,7 @@ package io.github.arielfikru.rabbitrocket
 
 import android.content.Context
 import io.github.arielfikru.rabbitrocket.hls.HlsClient
+import io.github.arielfikru.rabbitrocket.hls.HttpException
 import io.github.arielfikru.rabbitrocket.hls.Playlist
 import io.github.arielfikru.rabbitrocket.hls.Probe
 import kotlinx.coroutines.CancellationException
@@ -21,42 +22,108 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
+/** A failure that retrying cannot fix. */
+class PermanentException(message: String) : IOException(message)
+
 class DownloadEngine(private val ctx: Context) {
 
     suspend fun run(id: Long) {
-        val job = DownloadStore.get(id)?.takeIf { it.status == Status.Queued } ?: return
+        if (DownloadStore.get(id)?.status != Status.Queued) return
         val work = workDir(ctx, id).apply { mkdirs() }
         try {
-            DownloadStore.update(id) { it.copy(status = Status.Downloading, error = null, speed = 0) }
-            val client = HlsClient(job.headers())
-            val (final, mime) = if (job.direct) runDirect(id, client, job, work) else runHls(id, client, job, work)
-
-            DownloadStore.update(id) { it.copy(status = Status.Saving, speed = 0) }
-            val fileName = "${job.name}.${final.extension}"
-            val size = final.length()
-            val uri = withContext(Dispatchers.IO) { Storage.saveToDownloads(ctx, final, fileName, mime) }
-            work.deleteRecursively()
-            DownloadStore.update(id) {
-                it.copy(
-                    status = Status.Done, outputUri = uri.toString(), outputMime = mime,
-                    fileName = fileName, size = size, speed = 0,
-                )
+            var attempt = 0
+            while (true) {
+                val error = try {
+                    attemptOnce(id, work)
+                    return
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    e
+                }
+                when {
+                    !retryable(error) || (attempt >= MAX_RETRIES && Net.isOnline(ctx)) -> {
+                        DownloadStore.update(id) {
+                            it.copy(status = Status.Failed, speed = 0, retryIn = 0, waitingNet = false,
+                                error = error.message ?: error.javaClass.simpleName)
+                        }
+                        return
+                    }
+                    // Offline costs no attempt: wait for the network, then go again.
+                    !Net.isOnline(ctx) -> {
+                        DownloadStore.update(id) {
+                            it.copy(status = Status.Retrying, speed = 0, waitingNet = true, retryIn = 0, error = reason(error))
+                        }
+                        Net.awaitOnline(ctx)
+                    }
+                    else -> {
+                        attempt++
+                        var left = BACKOFF_S[attempt - 1]
+                        while (left > 0) {
+                            DownloadStore.update(id) {
+                                it.copy(status = Status.Retrying, speed = 0, waitingNet = false, attempt = attempt,
+                                    retryIn = left, error = reason(error))
+                            }
+                            delay(1000)
+                            left--
+                            if (!Net.isOnline(ctx)) break
+                        }
+                    }
+                }
             }
         } catch (e: CancellationException) {
-            DownloadStore.update(id) { it.copy(status = Status.Canceled, speed = 0) }
-            throw e
-        } catch (e: Throwable) {
-            DownloadStore.update(id) {
-                it.copy(status = Status.Failed, speed = 0, error = e.message ?: e.javaClass.simpleName)
+            if (pauseRequests.remove(id)) {
+                DownloadStore.update(id) { it.copy(status = Status.Paused, speed = 0, retryIn = 0, waitingNet = false) }
+            } else {
+                // A real cancel: nothing is kept for later.
+                work.deleteRecursively()
+                DownloadStore.update(id) {
+                    it.copy(status = Status.Canceled, speed = 0, retryIn = 0, waitingNet = false, done = 0, bytes = 0)
+                }
             }
+            throw e
         }
+    }
+
+    private suspend fun attemptOnce(id: Long, work: File) {
+        val job = DownloadStore.get(id) ?: return
+        work.mkdirs()
+        DownloadStore.update(id) { it.copy(status = Status.Downloading, error = null, speed = 0, retryIn = 0, waitingNet = false) }
+        val client = HlsClient(job.headers())
+        val (final, mime) = if (job.direct) runDirect(id, client, job, work) else runHls(id, client, job, work)
+
+        DownloadStore.update(id) { it.copy(status = Status.Saving, speed = 0) }
+        val fileName = "${job.name}.${final.extension}"
+        val size = final.length()
+        val uri = withContext(Dispatchers.IO) { Storage.saveToDownloads(ctx, final, fileName, mime) }
+        work.deleteRecursively()
+        DownloadStore.update(id) {
+            it.copy(
+                status = Status.Done, outputUri = uri.toString(), outputMime = mime,
+                fileName = fileName, size = size, speed = 0, attempt = 0, error = null,
+            )
+        }
+        runCatching { JobFrames.ensurePoster(ctx, id) }
+    }
+
+    /** Network trouble and server hiccups are worth another go; a 404, DRM or a web page never will be. */
+    private fun retryable(e: Throwable): Boolean = when (e) {
+        is PermanentException -> false
+        is HttpException -> e.code >= 500 || e.code == 408 || e.code == 429
+        is IOException -> e.message?.contains("halaman web") != true
+        else -> false
+    }
+
+    private fun reason(e: Throwable) = when (e) {
+        is HttpException -> "Server error ${e.code}"
+        else -> "Koneksi putus"
     }
 
     private suspend fun runHls(id: Long, client: HlsClient, job: DlJob, work: File): Pair<File, String> {
         val media = client.fetchMedia(job.url)
-        if (media.segments.isEmpty()) throw IOException("Playlist kosong")
+        if (media.segments.isEmpty()) throw PermanentException("Playlist kosong")
         media.segments.firstNotNullOfOrNull { s -> s.key?.method?.takeIf { it != "AES-128" } }?.let {
-            throw IOException("Enkripsi $it (DRM) tidak didukung")
+            throw PermanentException("Enkripsi $it (DRM) tidak didukung")
         }
         DownloadStore.update(id) { it.copy(total = media.segments.size) }
 
@@ -85,7 +152,7 @@ class DownloadEngine(private val ctx: Context) {
     private suspend fun runDirect(id: Long, client: HlsClient, job: DlJob, work: File): Pair<File, String> =
         coroutineScope {
             val probe = client.probe(job.url) as? Probe.Direct
-                ?: throw IOException("Link ini ternyata playlist; cek ulang dari awal")
+                ?: throw PermanentException("Link ini ternyata playlist; cek ulang dari awal")
             val size = probe.size
             DownloadStore.update(id) { it.copy(totalBytes = maxOf(size, 0)) }
 
@@ -187,6 +254,12 @@ class DownloadEngine(private val ctx: Context) {
         }
 
     companion object {
+        private const val MAX_RETRIES = 3
+        private val BACKOFF_S = intArrayOf(5, 15, 30)
+
+        /** Jobs whose cancellation is a pause: parts stay on disk. Set by [DownloadService] just before it cancels. */
+        val pauseRequests: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
         private const val PARALLEL = 6
         private const val PARTS = 4
         private const val MIN_SPLIT = 8L shl 20

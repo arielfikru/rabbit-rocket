@@ -62,6 +62,11 @@ object Notifs {
             .setSubText(if (queued > 0) "$pct% · +$queued antri" else "$pct%")
             .setShortCriticalText(if (job.status == Status.Downloading) "$pct%" else job.status.label.lowercase())
             .setRequestPromotedOngoing(true)
+            .apply {
+                if (job.status == Status.Downloading || job.status == Status.Retrying) {
+                    addAction(R.drawable.ic_action_pause, "Jeda", pauseIntent(ctx, job.id))
+                }
+            }
             .addAction(R.drawable.ic_action_close, "Batal", cancelIntent(ctx, job.id))
             .setProgress(max, value, job.isIndeterminate)
             .setStyle(
@@ -98,6 +103,15 @@ object Notifs {
                     .addAction(R.drawable.ic_action_open_with, "App lain", openWithIntent(ctx, job.id, uri, job.outputMime))
                     .addAction(R.drawable.ic_action_share, "Share", shareIntent(ctx, job.id, uri, job.outputMime))
             }
+            // Dismissable: nothing runs while paused, it is only a way back in.
+            Status.Paused -> {
+                b.setColor(VIOLET)
+                    .setContentTitle("Dijeda: ${job.name}")
+                    .setContentText(statusLine(job))
+                    .setContentIntent(openApp(ctx, 0))
+                    .addAction(R.drawable.ic_action_play, "Lanjutkan", resumeIntent(ctx, job.id))
+                    .addAction(R.drawable.ic_action_close, "Batal", cancelIntent(ctx, job.id))
+            }
             Status.Failed -> {
                 b.setColor(VIOLET)
                     .setContentTitle("Gagal meluncur: ${job.name}")
@@ -132,6 +146,12 @@ object Notifs {
         if (retryId > 0) i.putExtra(MainActivity.EXTRA_RETRY, retryId)
         return PendingIntent.getActivity(ctx, (retryId % 100_000).toInt(), i, FLAGS)
     }
+
+    private fun pauseIntent(ctx: Context, id: Long): PendingIntent =
+        PendingIntent.getService(ctx, 500_000 + (id % 100_000).toInt(), DownloadService.pauseIntent(ctx, id), FLAGS)
+
+    private fun resumeIntent(ctx: Context, id: Long): PendingIntent =
+        PendingIntent.getForegroundService(ctx, 600_000 + (id % 100_000).toInt(), DownloadService.startIntent(ctx, id), FLAGS)
 
     private fun cancelIntent(ctx: Context, id: Long): PendingIntent =
         PendingIntent.getService(ctx, (id % 100_000).toInt(), DownloadService.cancelIntent(ctx, id), FLAGS)

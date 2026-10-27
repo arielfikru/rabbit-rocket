@@ -17,6 +17,9 @@ import java.io.File
 object Thumbnails {
     const val COUNT = 9
 
+    /** Long side of a frame; sharp enough to zoom into, ~1.8 MB each as RGB_565. */
+    const val FRAME_MAX = 1280
+
     data class Thumb(val slot: Int, val timeSec: Double, val bitmap: Bitmap)
 
     fun slots(media: Playlist.Media): List<Int> {
@@ -26,7 +29,7 @@ object Thumbnails {
     }
 
     /** Video dimensions as stored, swapped for rotated (portrait) recordings. */
-    private fun size(r: MediaMetadataRetriever): Pair<Int, Int>? {
+    internal fun size(r: MediaMetadataRetriever): Pair<Int, Int>? {
         val w = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: return null
         val h = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: return null
         val rot = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
@@ -82,9 +85,7 @@ object Thumbnails {
             onInfo(ms / 1000.0, size(r))
             for (i in 0 until COUNT) {
                 val t = (i + 0.5) * ms / COUNT
-                val bmp = runCatching {
-                    r.getScaledFrameAtTime((t * 1000).toLong(), MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 270)
-                }.getOrNull() ?: continue
+                val bmp = runCatching { grab(r, (t * 1000).toLong()) }.getOrNull() ?: continue
                 emit(Thumb(i, t / 1000.0, bmp))
             }
         } catch (e: CancellationException) {
@@ -96,13 +97,21 @@ object Thumbnails {
         }
     }.flowOn(Dispatchers.IO)
 
+    /** A frame no bigger than [max] on its long side; never upscaled. */
+    internal fun grab(r: MediaMetadataRetriever, timeUs: Long, max: Int = FRAME_MAX): Bitmap? {
+        val params = MediaMetadataRetriever.BitmapParams().apply { preferredConfig = Bitmap.Config.RGB_565 }
+        val long = size(r)?.let { (w, h) -> maxOf(w, h) } ?: 0
+        val opt = MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+        return if (long in 1..max) r.getFrameAtTime(timeUs, opt, params)
+        else r.getScaledFrameAtTime(timeUs, opt, max, max, params)
+    }
+
     private fun frame(f: File, onSize: (Int, Int) -> Unit): Bitmap? {
         val r = MediaMetadataRetriever()
         return try {
             r.setDataSource(f.absolutePath)
             size(r)?.let { (w, h) -> onSize(w, h) }
-            r.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 270)
-                ?: r.getFrameAtTime(-1)
+            grab(r, 0) ?: r.getFrameAtTime(-1)
         } catch (_: Exception) {
             null
         } finally {

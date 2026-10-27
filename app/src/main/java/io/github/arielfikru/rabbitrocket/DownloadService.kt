@@ -47,10 +47,20 @@ class DownloadService : Service() {
                     this, Notifs.PROGRESS_ID, Notifs.progress(this, currentId?.let(DownloadStore::get), queue.size),
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
                 )
-                if (id > 0 && id != currentId && id !in queue) queue.addLast(id)
+                if (id > 0 && id != currentId && id !in queue) {
+                    // "Lanjutkan" from the card or the notification: a fresh round of automatic retries.
+                    DownloadStore.update(id) {
+                        if (it.status == Status.Paused || it.status == Status.Failed || it.status == Status.Canceled) {
+                            it.copy(status = Status.Queued, error = null, attempt = 0)
+                        } else it
+                    }
+                    Notifs.cancelResult(this, id)
+                    queue.addLast(id)
+                }
                 pump()
             }
             ACTION_CANCEL -> cancel(id)
+            ACTION_PAUSE -> pause(id)
         }
         if (worker?.isActive != true) stopSelf()
         return START_NOT_STICKY
@@ -80,13 +90,32 @@ class DownloadService : Service() {
         }
     }
 
+    /** Batal: stops the job and throws away whatever was downloaded. */
     private fun cancel(id: Long) {
+        DownloadEngine.pauseRequests.remove(id)
         if (id == currentId) {
             currentJob?.cancel()
-        } else {
-            queue.remove(id)
-            DownloadStore.update(id) { if (it.status == Status.Queued) it.copy(status = Status.Canceled) else it }
+            return
         }
+        queue.remove(id)
+        val was = DownloadStore.get(id)?.status
+        if (was == Status.Queued || was == Status.Paused) {
+            DownloadStore.update(id) { it.copy(status = Status.Canceled, done = 0, bytes = 0) }
+            Notifs.cancelResult(this, id)
+            val dir = DownloadEngine.workDir(applicationContext, id)
+            // Not on [scope]: the service may stop right after this and cancel it.
+            Thread { dir.deleteRecursively() }.start()
+        }
+    }
+
+    /** Jeda: stops the job (and any pending retry) but keeps the parts for "Lanjutkan". */
+    private fun pause(id: Long) {
+        if (id == currentId) {
+            DownloadEngine.pauseRequests.add(id)
+            currentJob?.cancel()
+            return
+        }
+        if (queue.remove(id)) DownloadStore.update(id) { it.copy(status = Status.Paused) }
     }
 
     @Suppress("MissingPermission")
@@ -103,12 +132,19 @@ class DownloadService : Service() {
     companion object {
         private const val ACTION_START = "start"
         private const val ACTION_CANCEL = "cancel"
+        private const val ACTION_PAUSE = "pause"
         private const val EXTRA_ID = "id"
 
         fun start(ctx: Context, id: Long) {
             val i = Intent(ctx, DownloadService::class.java).setAction(ACTION_START).putExtra(EXTRA_ID, id)
             ContextCompat.startForegroundService(ctx, i)
         }
+
+        fun startIntent(ctx: Context, id: Long): Intent =
+            Intent(ctx, DownloadService::class.java).setAction(ACTION_START).putExtra(EXTRA_ID, id)
+
+        fun pauseIntent(ctx: Context, id: Long): Intent =
+            Intent(ctx, DownloadService::class.java).setAction(ACTION_PAUSE).putExtra(EXTRA_ID, id)
 
         fun cancelIntent(ctx: Context, id: Long): Intent =
             Intent(ctx, DownloadService::class.java).setAction(ACTION_CANCEL).putExtra(EXTRA_ID, id)

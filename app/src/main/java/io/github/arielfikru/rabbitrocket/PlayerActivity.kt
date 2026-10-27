@@ -120,8 +120,9 @@ class PlayerActivity : ComponentActivity() {
         uri = u
         mime = i.type
         title = i.getStringExtra(EXTRA_TITLE) ?: u.lastPathSegment.orEmpty()
-        startPos = Resume.get(this, u)
-        resumedFrom = startPos
+        val at = i.getLongExtra(EXTRA_START_MS, -1L)
+        startPos = if (at >= 0) at else Resume.get(this, u)
+        resumedFrom = if (at >= 0) 0L else startPos
         playWhenReady = true
         return true
     }
@@ -255,13 +256,16 @@ class PlayerActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_TITLE = "title"
+        const val EXTRA_START_MS = "start_ms"
         const val SEEK_MS = 10_000L
         private const val ACTION_TOGGLE = "io.github.arielfikru.rabbitrocket.PIP_TOGGLE"
 
-        fun intent(ctx: Context, uri: Uri, mime: String?, title: String?): Intent =
+        /** [startMs] ≥ 0 starts there instead of the remembered position. */
+        fun intent(ctx: Context, uri: Uri, mime: String?, title: String?, startMs: Long = -1): Intent =
             Intent(ctx, PlayerActivity::class.java)
                 .setDataAndType(uri, mime ?: "video/*")
                 .putExtra(EXTRA_TITLE, title)
+                .putExtra(EXTRA_START_MS, startMs)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
 }
