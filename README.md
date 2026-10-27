@@ -14,6 +14,7 @@ Android app untuk download video dari link **HLS (.m3u8)**, **M3U**, atau **file
 - **Preview dulu**: putar stream-nya, lihat durasi, jumlah segmen, perkiraan ukuran, dan grid cuplikan 3x3. Tap cuplikan untuk melihatnya layar penuh dan tajam (sampai 1280 px): cubit atau double-tap untuk zoom, geser untuk pindah cuplikan, lalu **Putar dari sini**.
 - **Browser bawaan**: buka halaman videonya, Rabbit Rocket mencatat link HLS/MP4 dari elemen `<video>` dan lalu lintas jaringan. Dari daftar "media ditemukan", tinggal **Salin** atau **Download** (Referer, cookie, dan User-Agent halaman ikut terbawa, jadi link bertoken tetap jalan).
 - **Multi-tab, bookmark, dan tab yang awet**: tab tetap ada walau pindah ke Download, layar diputar, atau app ditutup.
+- **Riwayat browser**: menu ⋮ → Riwayat, dikelompokkan per hari, bisa dicari dan dihapus per item atau semuanya. Situs terakhir dibuka juga tampil di halaman tab baru.
 - **Blokir iklan & popup** (aktif bawaan): daftar AdGuard DNS diunduh otomatis dan diperbarui mingguan; popup skrip dibuang, link `target=_blank` asli dibuka di tab baru.
 - **DNS-over-HTTPS**: Cloudflare (bawaan), AdGuard, Google, Quad9, atau DNS jaringan. Dipakai browser dan download, membantu membuka situs yang diblokir lewat DNS operator.
 - **Simpan untuk nanti**: simpan link dari preview atau dari Browser, lalu preview/download kapan saja. Daftarnya tetap ada setelah app ditutup.

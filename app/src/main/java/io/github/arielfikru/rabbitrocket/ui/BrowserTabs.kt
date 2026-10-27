@@ -284,6 +284,7 @@ internal object Tabs {
 
                 override fun onPageFinished(view: WebView, url: String) {
                     if (!docStart) view.evaluateJavascript(SNIFF_JS, null)
+                    BrowserHistory.record(url, view.title?.takeIf { it != url } ?: state.title)
                     save()
                 }
 

@@ -59,6 +59,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
@@ -207,7 +208,7 @@ private fun normalize(input: String): String {
     }
 }
 
-private enum class BrowserSheet { Found, Menu, Tabs }
+private enum class BrowserSheet { Found, Menu, Tabs, History }
 
 @Composable
 fun BrowserScreen(vm: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
@@ -216,6 +217,7 @@ fun BrowserScreen(vm: MainViewModel, visible: Boolean, modifier: Modifier = Modi
     remember(ctx) {
         Tabs.attach(ctx)
         Bookmarks.init(ctx)
+        BrowserHistory.init(ctx)
         NetSettings.applyToWebView()
     }
     DisposableEffect(ctx) { onDispose { Tabs.detach(ctx) } }
@@ -291,8 +293,14 @@ fun BrowserScreen(vm: MainViewModel, visible: Boolean, modifier: Modifier = Modi
                         vm.downloadFound(f, Tabs.webFor(tab).settings.userAgentString)
                     },
                 )
-                BrowserSheet.Menu -> MenuContent(tab) { sheet = null }
+                BrowserSheet.Menu -> MenuContent(tab, onHistory = { sheet = BrowserSheet.History }) { sheet = null }
                 BrowserSheet.Tabs -> TabsContent { sheet = null }
+                BrowserSheet.History -> HistoryContent(
+                    open = { url ->
+                        load(url)
+                        sheet = null
+                    },
+                )
                 null -> {}
             }
         }
@@ -452,6 +460,26 @@ private fun NewTabPage(load: (String) -> Unit) {
             style = Type.small.copy(textAlign = TextAlign.Center),
             modifier = Modifier.widthIn(max = 280.dp).padding(top = 14.dp),
         )
+        val recent = BrowserHistory.list.asSequence().filter { v -> Bookmarks.list.none { it.url == v.url } }.take(5).toList()
+        if (recent.isNotEmpty()) {
+            Text(
+                "Terakhir dibuka",
+                style = Type.section.copy(fontSize = 17.sp),
+                modifier = Modifier.fillMaxWidth().padding(top = 32.dp, bottom = 10.dp),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                recent.forEach { v ->
+                    PageRow(
+                        title = v.title,
+                        url = v.url,
+                        selected = false,
+                        onClick = { load(v.url) },
+                        onRemove = { BrowserHistory.remove(v) },
+                        removeLabel = "Hapus dari riwayat",
+                    )
+                }
+            }
+        }
         if (Bookmarks.list.isNotEmpty()) {
             Text(
                 "Bookmark",
@@ -532,7 +560,7 @@ private fun TabsContent(onDone: () -> Unit) {
 }
 
 @Composable
-private fun MenuContent(tab: Tab, onDone: () -> Unit) {
+private fun MenuContent(tab: Tab, onHistory: () -> Unit, onDone: () -> Unit) {
     val state = tab.state
     val loading = state.progress < 100 && state.started
     val url = state.pageUrl
@@ -562,6 +590,18 @@ private fun MenuContent(tab: Tab, onDone: () -> Unit) {
                 Tabs.newTab()
                 onDone()
             }
+        }
+
+        Row(
+            Modifier.padding(top = 16.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(RR.NightSky)
+                .clickable(role = Role.Button, onClick = onHistory)
+                .heightIn(min = 52.dp).padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(Icons.Default.DateRange, null, tint = RR.Cream)
+            Text("Riwayat", style = Type.body.copy(fontWeight = FontWeight.Medium), modifier = Modifier.weight(1f))
+            Text("${BrowserHistory.list.size} situs", style = Type.small.copy(fontSize = 12.sp))
         }
 
         Text("Perlindungan", style = Type.section.copy(fontSize = 17.sp), modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
@@ -617,6 +657,80 @@ private fun MenuContent(tab: Tab, onDone: () -> Unit) {
             style = Type.small.copy(fontSize = 12.sp),
             modifier = Modifier.padding(top = 10.dp),
         )
+    }
+}
+
+@Composable
+private fun HistoryContent(open: (String) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var confirmClear by remember { mutableStateOf(false) }
+    val groups = groupHistory(BrowserHistory.list, query)
+
+    Column(Modifier.padding(horizontal = 20.dp)) {
+        Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Riwayat", style = Type.section, modifier = Modifier.weight(1f))
+            if (BrowserHistory.list.isNotEmpty()) {
+                if (confirmClear) {
+                    SmallButton("Batal", RR.NightSky, RR.Muted) { confirmClear = false }
+                    Spacer(Modifier.size(8.dp))
+                    SmallButton("Hapus semua", RR.Danger, RR.NightSky) {
+                        BrowserHistory.clear()
+                        confirmClear = false
+                    }
+                } else {
+                    SmallButton("Hapus semua", RR.NightSky, RR.Muted) { confirmClear = true }
+                }
+            }
+        }
+        BasicTextField(
+            value = query,
+            onValueChange = { query = it },
+            singleLine = true,
+            textStyle = Type.body.copy(fontSize = 14.sp),
+            cursorBrush = SolidColor(RR.Flame),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            decorationBox = { inner ->
+                Box(
+                    Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(percent = 50)).background(RR.NightSky)
+                        .padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (query.isEmpty()) Text("Cari judul atau alamat", style = Type.body.copy(fontSize = 14.sp, color = RR.Muted))
+                    inner()
+                }
+            },
+        )
+        LazyColumn(
+            Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 480.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = 24.dp),
+        ) {
+            if (groups.isEmpty()) {
+                item {
+                    Text(
+                        if (query.isBlank()) "Belum ada halaman yang dibuka." else "Tidak ada yang cocok dengan \"$query\".",
+                        style = Type.small,
+                        modifier = Modifier.padding(vertical = 16.dp),
+                    )
+                }
+            }
+            groups.forEach { (day, visits) ->
+                item(key = "day-$day") {
+                    Text(day, style = Type.label.copy(color = RR.Muted), modifier = Modifier.padding(top = 8.dp))
+                }
+                items(visits, key = { it.url }) { v ->
+                    PageRow(
+                        title = v.title,
+                        url = v.url,
+                        selected = false,
+                        onClick = { open(v.url) },
+                        onRemove = { BrowserHistory.remove(v) },
+                        removeLabel = "Hapus dari riwayat",
+                    )
+                }
+            }
+        }
     }
 }
 
