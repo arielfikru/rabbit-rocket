@@ -12,7 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import io.github.arielfikru.rabbitrocket.ui.MainScreen
+import io.github.arielfikru.rabbitrocket.ui.AppScreen
 import io.github.arielfikru.rabbitrocket.ui.MainViewModel
 import io.github.arielfikru.rabbitrocket.ui.RabbitRocketTheme
 
@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         if (savedInstanceState == null) handle(intent)
-        setContent { RabbitRocketTheme { MainScreen(vm) } }
+        setContent { RabbitRocketTheme { AppScreen(vm) } }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -51,7 +51,8 @@ class MainActivity : ComponentActivity() {
         val text = (if (i.action == Intent.ACTION_SEND) i.getStringExtra(Intent.EXTRA_TEXT) else null)
             ?: i.dataString ?: return
         extractUrl(text)?.let {
-            vm.url = it
+            vm.tab = 0
+            vm.editUrl(it)
             vm.check()
         }
     }

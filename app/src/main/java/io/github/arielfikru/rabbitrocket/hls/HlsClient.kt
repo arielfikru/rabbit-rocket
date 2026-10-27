@@ -2,6 +2,7 @@ package io.github.arielfikru.rabbitrocket.hls
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
@@ -10,7 +11,10 @@ import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
+import java.net.URLDecoder
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -34,6 +38,23 @@ object Http {
 }
 
 class HttpException(val code: Int) : IOException("Server membalas HTTP $code")
+
+sealed interface Probe {
+    data class Hls(val url: String) : Probe
+
+    data class Direct(
+        val url: String,
+        val size: Long,
+        val mime: String?,
+        val ranges: Boolean,
+        val fileName: String?,
+    ) : Probe {
+        val ext: String get() = MediaTypes.extFor(url, mime, fileName)
+        val mimeType: String get() = MediaTypes.mimeFor(ext)
+    }
+}
+
+private val CD_NAME = Regex("""filename\*?=(?:UTF-8'')?"?([^";]+)"?""", RegexOption.IGNORE_CASE)
 
 class HlsClient(private val headers: Map<String, String>) {
     private val keys = ConcurrentHashMap<String, ByteArray>()
@@ -61,6 +82,88 @@ class HlsClient(private val headers: Map<String, String>) {
                     ?: throw IOException("Playlist bertingkat terlalu dalam")
             }
         }
+
+    /** Fetches only the first bytes to tell a playlist from a direct media file. */
+    suspend fun probe(url: String): Probe = retrying {
+        Http.client.newCall(request(url, ByteRange(0, 4096))).await().use { r ->
+            r.ensureOk()
+            val type = r.header("Content-Type")?.substringBefore(';')?.trim()?.lowercase()
+            val head = withContext(Dispatchers.IO) {
+                val src = r.body!!.source()
+                src.request(64)
+                src.buffer.snapshot().utf8().take(64)
+            }
+            val finalUrl = r.request.url.toString()
+            val ext = MediaTypes.pathExt(finalUrl) ?: MediaTypes.pathExt(url)
+            val textual = type == null || type.startsWith("text/") || type == "application/octet-stream"
+            when {
+                head.trimStart('\uFEFF', ' ', '\r', '\n', '\t').startsWith("#EXTM3U") ||
+                    type?.contains("mpegurl") == true ||
+                    ((ext == "m3u8" || ext == "m3u") && textual) -> Probe.Hls(finalUrl)
+
+                type == "text/html" || head.trimStart().startsWith("<") ->
+                    throw IllegalArgumentException(
+                        "Link ini halaman web, bukan video. Buka lewat tab Browser supaya link videonya ketemu.",
+                    )
+
+                else -> {
+                    val partial = r.code == 206
+                    val size = if (partial) r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: -1L
+                    else r.body!!.contentLength()
+                    val name = r.header("Content-Disposition")?.let { CD_NAME.find(it)?.groupValues?.get(1) }
+                        ?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
+                    Probe.Direct(finalUrl, size, type, partial && size > 0, name)
+                }
+            }
+        }
+    }
+
+    /**
+     * Appends bytes [from]..[to] (inclusive; null = until EOF) of [url] to [file].
+     * Network drops resume from the file's current length.
+     */
+    suspend fun downloadRange(url: String, file: File, from: Long, to: Long?) {
+        var failures = 0
+        while (true) {
+            val start = from + file.length()
+            if (to != null && start > to) return
+            val ranged = start > 0 || to != null
+            val req = Request.Builder().url(url).apply {
+                headers.forEach { (k, v) -> header(k, v) }
+                if (ranged) header("Range", "bytes=$start-${to ?: ""}")
+            }.build()
+            val before = file.length()
+            try {
+                Http.client.newCall(req).await().use { r ->
+                    r.ensureOk()
+                    if (ranged && r.code != 206) {
+                        // Server ignored the range: only a whole-file download can start over.
+                        if (from == 0L && to == null) file.delete()
+                        else throw IllegalStateException("Server tidak mendukung download bertahap")
+                    }
+                    withContext(Dispatchers.IO) {
+                        r.body!!.byteStream().use { input ->
+                            FileOutputStream(file, true).use { out ->
+                                val buf = ByteArray(1 shl 16)
+                                while (true) {
+                                    ensureActive()
+                                    val n = input.read(buf)
+                                    if (n < 0) break
+                                    out.write(buf, 0, n)
+                                }
+                            }
+                        }
+                    }
+                }
+                if (to == null || from + file.length() > to) return
+                if (file.length() == before && ++failures > 5) throw IOException("Koneksi terus terputus")
+            } catch (e: IOException) {
+                if (e is HttpException && e.code in 400..499 && e.code != 408 && e.code != 429) throw e
+                if (++failures > 5) throw e
+                delay(1000L * failures)
+            }
+        }
+    }
 
     suspend fun bytes(url: String, range: ByteRange? = null): ByteArray = retrying {
         Http.client.newCall(request(url, range)).await().use { r ->

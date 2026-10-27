@@ -56,6 +56,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -143,8 +145,8 @@ import io.github.arielfikru.rabbitrocket.hls.Thumbnails
 import io.github.arielfikru.rabbitrocket.statusLine
 
 // Motion vocabulary: shape morphs use expo-out tweens, arrivals use soft springs, exits ease in-out.
-private val ExpoOut = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
-private val InOut = CubicBezierEasing(0.65f, 0f, 0.35f, 1f)
+internal val ExpoOut = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
+internal val InOut = CubicBezierEasing(0.65f, 0f, 0.35f, 1f)
 private const val GROW_MS = 520
 /** Preview contents start once the card is ~45% grown, then step down every 60 ms. */
 private const val ENTER_DELAY = 230
@@ -152,15 +154,15 @@ private const val STEP_MS = 60
 private const val RELEASE_AFTER_MS = 600L
 
 @Composable
-fun MainScreen(vm: MainViewModel) {
+fun HomeScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     val jobs by vm.jobs.collectAsStateWithLifecycle()
     val waiting = jobs.count { it.status.isWaiting }
 
     LazyColumn(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(RR.NightSky)
-            .windowInsetsPadding(WindowInsets.safeDrawing),
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -241,15 +243,15 @@ private fun LaunchCard(vm: MainViewModel) {
                 .clip(CircleShape).background(RR.VioletGlow),
         )
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("Link HLS / M3U", style = Type.label)
+            Text("Link HLS / M3U / MP4", style = Type.label)
             UrlField(
                 value = vm.url,
-                onChange = { vm.url = it },
+                onChange = vm::editUrl,
                 onGo = submit,
                 action = if (vm.url.isEmpty()) "Paste" else "Hapus",
                 onAction = {
-                    if (vm.url.isEmpty()) clipboard.getText()?.text?.let { vm.url = extractUrl(it) ?: it.trim() }
-                    else vm.url = ""
+                    if (vm.url.isEmpty()) clipboard.getText()?.text?.let { vm.editUrl(extractUrl(it) ?: it.trim()) }
+                    else vm.editUrl("")
                 },
             )
             OptionsToggle(vm.optionsOpen) { vm.optionsOpen = !vm.optionsOpen }
@@ -300,7 +302,7 @@ private fun UrlField(value: String, onChange: (String) -> Unit, onGo: () -> Unit
             keyboardActions = KeyboardActions(onGo = { onGo() }),
             decorationBox = { inner ->
                 Box {
-                    if (value.isEmpty()) Text("https://…/master.m3u8", style = Type.body.copy(color = RR.Muted))
+                    if (value.isEmpty()) Text("https://…/video.m3u8 atau .mp4", style = Type.body.copy(color = RR.Muted))
                     inner()
                 }
             },
@@ -370,7 +372,7 @@ private fun Field(label: String, value: String, onChange: (String) -> Unit, plac
 @Composable
 private fun PreviewCard(p: Preview, vm: MainViewModel) {
     val headers = remember(p.streamUrl) { vm.headersFor(p.streamUrl) }
-    val player = rememberPreviewPlayer(p.streamUrl, headers)
+    val player = rememberPreviewPlayer(p.streamUrl, headers, hls = !p.isDirect)
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
 
@@ -418,7 +420,7 @@ private class PreviewPlayerState(val player: ExoPlayer) {
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun rememberPreviewPlayer(url: String, headers: Map<String, String>): PreviewPlayerState {
+private fun rememberPreviewPlayer(url: String, headers: Map<String, String>, hls: Boolean): PreviewPlayerState {
     val ctx = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val state = remember(url) {
@@ -426,7 +428,8 @@ private fun rememberPreviewPlayer(url: String, headers: Map<String, String>): Pr
             .setUserAgent(headers["User-Agent"])
             .setDefaultRequestProperties(headers - "User-Agent")
         val player = ExoPlayer.Builder(ctx).setMediaSourceFactory(DefaultMediaSourceFactory(source)).build()
-        player.setMediaItem(MediaItem.Builder().setUri(url).setMimeType(MimeTypes.APPLICATION_M3U8).build())
+        // Direct files get no mime hint so ExoPlayer sniffs the container itself.
+        player.setMediaItem(MediaItem.Builder().setUri(url).apply { if (hls) setMimeType(MimeTypes.APPLICATION_M3U8) }.build())
         player.prepare()
         PreviewPlayerState(player)
     }
@@ -477,7 +480,11 @@ private fun InfoChips(p: Preview) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (p.duration > 0) Pill(fmtDuration(p.duration), RR.NightSky, RR.Pink)
         if (p.segments > 0) Pill("${p.segments} segmen", RR.NightSky, RR.Muted)
-        p.estimatedBytes?.let { Pill("± ${fmtBytes(it)}", RR.NightSky, RR.Muted) }
+        p.direct?.let { d ->
+            Pill(d.ext.uppercase(), RR.Violet, Color.White)
+            if (d.size > 0) Pill(fmtBytes(d.size), RR.NightSky, RR.Muted)
+            if (d.ranges && d.size >= 8L shl 20) Pill("Multi-koneksi", RR.NightSky, RR.Muted)
+        } ?: p.estimatedBytes?.let { Pill("± ${fmtBytes(it)}", RR.NightSky, RR.Muted) }
         if (p.encrypted) Pill("AES-128", RR.Violet, Color.White)
         if (p.isLive) Pill("LIVE · ambil yang ada", RR.Pink, RR.NightSky)
     }
@@ -601,7 +608,7 @@ private fun JobCard(job: DlJob, vm: MainViewModel, modifier: Modifier) {
             }
             Pill(chipText(job), RR.NightSky, RR.Pink)
         }
-        if (job.status.isActive || (job.done > 0 && job.status != Status.Done)) {
+        if (job.status.isActive || (job.hasPartial && job.status != Status.Done)) {
             FlameBar(job.overall, job.isIndeterminate && job.status.isActive)
         }
         Actions(job, vm)
@@ -609,7 +616,7 @@ private fun JobCard(job: DlJob, vm: MainViewModel, modifier: Modifier) {
 }
 
 private fun chipText(job: DlJob) = when (job.status) {
-    Status.Downloading -> if (job.total > 0) "${(job.downloadFraction * 100).toInt()}%" else "…"
+    Status.Downloading -> if (job.hasSize) "${(job.downloadFraction * 100).toInt()}%" else "…"
     Status.Converting -> "${job.convertProgress}%"
     else -> job.status.label.lowercase().replaceFirstChar { it.uppercase() }
 }
@@ -698,7 +705,7 @@ private fun Actions(job: DlJob, vm: MainViewModel) {
             }
             Status.Failed, Status.Canceled -> {
                 SmallButton("Hapus", RR.NightSky, RR.Muted) { vm.remove(job.id) }
-                SmallButton(if (job.done > 0) "Lanjutkan" else "Ulangi", RR.Flame, RR.NightSky) { vm.retry(job.id) }
+                SmallButton(if (job.hasPartial) "Lanjutkan" else "Ulangi", RR.Flame, RR.NightSky) { vm.retry(job.id) }
             }
             else -> SmallButton("Batal", RR.NightSky, RR.Cream) { vm.cancel(job.id) }
         }
@@ -731,7 +738,7 @@ private fun EmptyState(modifier: Modifier) {
             Modifier.size(84.dp, 92.dp).graphicsLayer { translationY = bob.value.dp.toPx() },
         )
         Text(
-            "Tempel link .m3u8 di atas, atau share link dari browser ke Rabbit Rocket.",
+            "Tempel link .m3u8 atau .mp4 di atas, atau buka tab Browser biar link videonya dicari otomatis.",
             style = Type.small.copy(textAlign = TextAlign.Center),
             modifier = Modifier.widthIn(max = 280.dp),
         )
@@ -741,7 +748,7 @@ private fun EmptyState(modifier: Modifier) {
 // ---------------------------------------------------------------- shared bits
 
 @Composable
-private fun Pill(text: String, bg: Color, fg: Color, modifier: Modifier = Modifier) {
+internal fun Pill(text: String, bg: Color, fg: Color, modifier: Modifier = Modifier) {
     Text(
         text,
         style = Type.small.copy(color = fg, fontWeight = FontWeight.SemiBold),
@@ -790,7 +797,7 @@ private fun PrimaryButton(text: String, enabled: Boolean, loading: Boolean = fal
 }
 
 @Composable
-private fun SmallButton(text: String, bg: Color, fg: Color, onClick: () -> Unit) {
+internal fun SmallButton(text: String, bg: Color, fg: Color, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.95f else 1f, spring(stiffness = 600f), label = "press")
@@ -809,7 +816,7 @@ private fun SmallButton(text: String, bg: Color, fg: Color, onClick: () -> Unit)
 
 /** Keeps showing the last non-null value, so exit animations have content to animate. */
 @Composable
-private fun <T> rememberLast(value: T?): T? {
+internal fun <T> rememberLast(value: T?): T? {
     val holder = remember { arrayOfNulls<Any?>(1) }
     if (value != null) holder[0] = value
     @Suppress("UNCHECKED_CAST")

@@ -1,21 +1,24 @@
 # Rabbit Rocket
 
-Android app untuk download video dari link **HLS (.m3u8)** atau **M3U**, dengan preview sebelum download.
+Android app untuk download video dari link **HLS (.m3u8)**, **M3U**, atau **file langsung** (MP4, MKV, WebM, …), dengan preview sebelum download dan browser bawaan yang mencarikan link videonya.
 
 <p>
   <img src="docs/home.png" width="240" alt="Beranda">
   <img src="docs/preview.png" width="240" alt="Preview dengan grid cuplikan 3x3">
   <img src="docs/done.png" width="240" alt="Download selesai">
+  <img src="docs/browser.png" width="240" alt="Browser dengan daftar media yang ditemukan">
 </p>
 
 ## Fitur
 
 - **Preview dulu**: putar stream-nya, lihat durasi, jumlah segmen, perkiraan ukuran, dan grid cuplikan 3x3 (tap cuplikan untuk loncat ke menit itu).
+- **Browser bawaan**: buka halaman videonya, Rabbit Rocket mencatat link HLS/MP4 dari elemen `<video>` dan lalu lintas jaringan. Dari daftar "media ditemukan", tinggal **Salin** atau **Download** (Referer, cookie, dan User-Agent halaman ikut terbawa, jadi link bertoken tetap jalan).
+- **File langsung** (MP4/MKV/WebM/MOV/MP3…): preview, grid cuplikan, ukuran pasti, dan download **4 koneksi paralel** kalau server mendukung Range.
 - **Pilih kualitas** dari master playlist (1080p, 720p, …).
 - **AES-128** terenkripsi didukung; DRM (SAMPLE-AES/Widevine) tidak.
 - **Simpan sebagai MP4** (transmux tanpa re-encode); kalau gagal, file `.ts` tetap disimpan. Stream fMP4 langsung jadi `.mp4`.
 - **Notifikasi**: progress, tombol Batal, lalu "Mendarat!" dengan tombol Buka/Share. Di Android 16 pakai ProgressStyle dengan tracker roket.
-- **Bisa dilanjutkan**: segmen yang sudah terunduh tidak diunduh ulang saat Lanjutkan.
+- **Bisa dilanjutkan**: segmen HLS atau potongan file yang sudah terunduh tidak diunduh ulang saat Lanjutkan.
 - **Share dari browser**: share link ke Rabbit Rocket, langsung dicek.
 - Opsi Referer / User-Agent untuk situs yang mewajibkannya.
 

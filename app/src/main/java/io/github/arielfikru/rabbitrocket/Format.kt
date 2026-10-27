@@ -16,16 +16,23 @@ fun fmtBytes(b: Long): String {
 
 fun statusLine(job: DlJob): String = when (job.status) {
     Status.Queued -> "menunggu giliran"
-    Status.Downloading ->
-        if (job.total == 0) "membaca playlist…"
-        else "${job.done}/${job.total} seg · ${fmtBytes(job.bytes)} · ${fmtBytes(job.speed)}/s"
+    Status.Downloading -> when {
+        job.direct && job.totalBytes > 0 ->
+            "${fmtBytes(job.bytes)} / ${fmtBytes(job.totalBytes)} · ${fmtBytes(job.speed)}/s"
+        job.direct -> if (job.bytes == 0L) "menghubungkan…" else "${fmtBytes(job.bytes)} · ${fmtBytes(job.speed)}/s"
+        job.total == 0 -> "membaca playlist…"
+        else -> "${job.done}/${job.total} seg · ${fmtBytes(job.bytes)} · ${fmtBytes(job.speed)}/s"
+    }
     Status.Merging -> "menggabungkan ${job.total} segmen"
     Status.Converting -> "konversi ke MP4 · ${job.convertProgress}%"
     Status.Saving -> "menyimpan ke ${Storage.displayPath}"
     Status.Done -> "${fmtBytes(job.size)} · ${Storage.displayPath}"
     Status.Failed -> job.error ?: "gagal"
-    Status.Canceled ->
-        if (job.done > 0) "${job.done}/${job.total} seg tersimpan · bisa dilanjutkan" else "dibatalkan"
+    Status.Canceled -> when {
+        !job.hasPartial -> "dibatalkan"
+        job.direct -> "${fmtBytes(job.bytes)} tersimpan · bisa dilanjutkan"
+        else -> "${job.done}/${job.total} seg tersimpan · bisa dilanjutkan"
+    }
 }
 
 fun fmtDuration(sec: Double): String {

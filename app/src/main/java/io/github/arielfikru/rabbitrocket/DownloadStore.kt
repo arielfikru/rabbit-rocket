@@ -29,10 +29,15 @@ data class DlJob(
     val referer: String?,
     val userAgent: String?,
     val toMp4: Boolean,
+    /** A plain media file (mp4/mkv/…) rather than an HLS playlist. */
+    val direct: Boolean = false,
+    val cookie: String? = null,
     val status: Status = Status.Queued,
     val done: Int = 0,
     val total: Int = 0,
     val bytes: Long = 0,
+    /** Direct files only: full size when the server reports it. */
+    val totalBytes: Long = 0,
     val speed: Long = 0,
     val convertProgress: Int = 0,
     val outputUri: String? = null,
@@ -43,6 +48,7 @@ data class DlJob(
 ) {
     fun headers(): Map<String, String> = buildMap {
         put("User-Agent", userAgent?.takeIf { it.isNotBlank() } ?: DEFAULT_UA)
+        cookie?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
         referer?.takeIf { it.isNotBlank() }?.let { ref ->
             put("Referer", ref)
             ref.toHttpUrlOrNull()?.let { u ->
@@ -52,13 +58,26 @@ data class DlJob(
         }
     }
 
-    val downloadFraction: Float get() = if (total > 0) done / total.toFloat() else 0f
+    val downloadFraction: Float
+        get() = when {
+            direct -> if (totalBytes > 0) (bytes.toFloat() / totalBytes).coerceAtMost(1f) else 0f
+            total > 0 -> done / total.toFloat()
+            else -> 0f
+        }
+
+    val hasSize: Boolean get() = if (direct) totalBytes > 0 else total > 0
+
+    /** Something on disk that "Lanjutkan" can build on. */
+    val hasPartial: Boolean get() = if (direct) bytes > 0 else done > 0
+
+    /** Direct files have no merge step, so downloading fills almost the whole bar. */
+    private val downloadShare: Float get() = if (direct) 0.97f else 0.85f
 
     /** Whole-job progress: downloading is 0–85%, merging/converting/saving fill the rest. */
     val overall: Float
         get() = when (status) {
-            Status.Queued, Status.Failed, Status.Canceled -> downloadFraction * 0.85f
-            Status.Downloading -> downloadFraction * 0.85f
+            Status.Queued, Status.Failed, Status.Canceled -> downloadFraction * downloadShare
+            Status.Downloading -> downloadFraction * downloadShare
             Status.Merging -> 0.87f
             Status.Converting -> 0.88f + convertProgress / 100f * 0.1f
             Status.Saving -> 0.99f
@@ -67,7 +86,7 @@ data class DlJob(
 
     val isIndeterminate: Boolean
         get() = status == Status.Merging || status == Status.Saving ||
-            (status == Status.Downloading && total == 0)
+            (status == Status.Downloading && !hasSize)
 }
 
 object DownloadStore {
