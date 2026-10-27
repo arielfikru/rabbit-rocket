@@ -141,6 +141,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import io.github.arielfikru.rabbitrocket.DlJob
 import io.github.arielfikru.rabbitrocket.Media
+import io.github.arielfikru.rabbitrocket.PlayerActivity
 import io.github.arielfikru.rabbitrocket.R
 import io.github.arielfikru.rabbitrocket.Status
 import io.github.arielfikru.rabbitrocket.extractUrl
@@ -776,7 +777,13 @@ private fun Actions(job: DlJob, vm: MainViewModel) {
                 val uri = Uri.parse(job.outputUri)
                 SmallButton("Hapus", RR.NightSky, RR.Muted) { confirm = true }
                 SmallButton("Share", RR.NightSky, RR.Cream) { ctx.open(Media.shareIntent(uri, job.outputMime)) }
-                SmallButton("Buka", RR.Flame, RR.NightSky) { ctx.open(Media.viewIntent(uri, job.outputMime)) }
+                // "Putar" stays in the app; the icon is the way out to VLC & co.
+                SmallIconButton(R.drawable.ic_action_open_with, "Buka dengan app lain") {
+                    Media.openWith(ctx, uri, job.outputMime)
+                }
+                SmallButton("Putar", RR.Flame, RR.NightSky) {
+                    ctx.startActivity(PlayerActivity.intent(ctx, uri, job.outputMime, job.name))
+                }
             }
             Status.Failed, Status.Canceled -> {
                 SmallButton("Hapus", RR.NightSky, RR.Muted) { vm.remove(job.id) }
@@ -960,6 +967,23 @@ internal fun SmallButton(text: String, bg: Color, fg: Color, onClick: () -> Unit
         contentAlignment = Alignment.Center,
     ) {
         Text(text, style = Type.small.copy(color = fg, fontWeight = FontWeight.SemiBold, fontSize = 14.sp))
+    }
+}
+
+@Composable
+private fun SmallIconButton(icon: Int, label: String, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.92f else 1f, spring(stiffness = 600f), label = "press")
+    Box(
+        Modifier.size(44.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(CircleShape)
+            .background(RR.NightSky)
+            .clickable(interaction, ripple(color = RR.Cream), role = Role.Button, onClickLabel = label, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(painterResource(icon), label, tint = RR.Cream, modifier = Modifier.size(20.dp))
     }
 }
 

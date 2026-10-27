@@ -8,4 +8,7 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+    <style name="Theme.RabbitRocket.Player">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
 </resources>

@@ -45,6 +45,18 @@
             </intent-filter>
         </activity>
 
+        <!-- No screenOrientation: the player follows how the phone is held. -->
+        <activity
+            android:name=".PlayerActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="io.github.arielfikru.rabbitrocket.player"
+            android:autoRemoveFromRecents="true"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:theme="@style/Theme.RabbitRocket.Player" />
+
         <service
             android:name=".DownloadService"
             android:exported="false"

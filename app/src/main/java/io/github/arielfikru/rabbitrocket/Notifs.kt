@@ -3,11 +3,13 @@ package io.github.arielfikru.rabbitrocket
 import android.Manifest
 import android.app.Notification
 import android.app.PendingIntent
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.widget.Toast
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -91,8 +93,9 @@ object Notifs {
                 b.setColor(FLAME)
                     .setContentTitle("Mendarat! ${job.fileName}")
                     .setContentText("${fmtBytes(job.size)} · ${Storage.displayPath}")
-                    .setContentIntent(viewIntent(ctx, job.id, uri, job.outputMime))
-                    .addAction(R.drawable.ic_action_play, "Buka", viewIntent(ctx, job.id, uri, job.outputMime))
+                    .setContentIntent(playIntent(ctx, job, uri))
+                    .addAction(R.drawable.ic_action_play, "Putar", playIntent(ctx, job, uri))
+                    .addAction(R.drawable.ic_action_open_with, "App lain", openWithIntent(ctx, job.id, uri, job.outputMime))
                     .addAction(R.drawable.ic_action_share, "Share", shareIntent(ctx, job.id, uri, job.outputMime))
             }
             Status.Failed -> {
@@ -133,8 +136,14 @@ object Notifs {
     private fun cancelIntent(ctx: Context, id: Long): PendingIntent =
         PendingIntent.getService(ctx, (id % 100_000).toInt(), DownloadService.cancelIntent(ctx, id), FLAGS)
 
-    private fun viewIntent(ctx: Context, id: Long, uri: Uri, mime: String?): PendingIntent =
-        PendingIntent.getActivity(ctx, 200_000 + (id % 100_000).toInt(), Media.viewIntent(uri, mime), FLAGS)
+    /** Same player the "Putar" button on the card opens, so a tap on the notification behaves alike. */
+    private fun playIntent(ctx: Context, job: DlJob, uri: Uri): PendingIntent = PendingIntent.getActivity(
+        ctx, 200_000 + (job.id % 100_000).toInt(),
+        PlayerActivity.intent(ctx, uri, job.outputMime, job.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), FLAGS,
+    )
+
+    private fun openWithIntent(ctx: Context, id: Long, uri: Uri, mime: String?): PendingIntent =
+        PendingIntent.getActivity(ctx, 400_000 + (id % 100_000).toInt(), Media.openWithIntent(uri, mime), FLAGS)
 
     private fun shareIntent(ctx: Context, id: Long, uri: Uri, mime: String?): PendingIntent =
         PendingIntent.getActivity(ctx, 300_000 + (id % 100_000).toInt(), Media.shareIntent(uri, mime), FLAGS)
@@ -144,6 +153,16 @@ object Media {
     fun viewIntent(uri: Uri, mime: String?): Intent = Intent(Intent.ACTION_VIEW)
         .setDataAndType(uri, mime ?: "video/*")
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    /** Always asks which app, even when the user has a default video player set. */
+    fun openWithIntent(uri: Uri, mime: String?): Intent =
+        Intent.createChooser(viewIntent(uri, mime), "Buka dengan…").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    fun openWith(ctx: Context, uri: Uri, mime: String?) = try {
+        ctx.startActivity(openWithIntent(uri, mime))
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(ctx, "Gak ada aplikasi yang bisa membuka file ini", Toast.LENGTH_SHORT).show()
+    }
 
     fun shareIntent(uri: Uri, mime: String?): Intent = Intent.createChooser(
         Intent(Intent.ACTION_SEND)
