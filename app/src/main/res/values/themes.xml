@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="night_sky">#16143B</color>
+    <string name="app_name">Rabbit Rocket</string>
+    <style name="Theme.RabbitRocket" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/night_sky</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
