@@ -1,19 +1,9 @@
 package io.github.arielfikru.rabbitrocket.ui
 
-import android.annotation.SuppressLint
-import android.content.Context
-import android.graphics.Bitmap
-import android.os.Handler
-import android.os.Looper
+import android.net.Uri
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -27,6 +17,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -36,7 +27,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
@@ -54,59 +47,73 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import io.github.arielfikru.rabbitrocket.R
 import io.github.arielfikru.rabbitrocket.hls.MediaKind
 import io.github.arielfikru.rabbitrocket.hls.MediaTypes
+import io.github.arielfikru.rabbitrocket.net.AdBlock
+import io.github.arielfikru.rabbitrocket.net.DnsChoice
+import io.github.arielfikru.rabbitrocket.net.NetSettings
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
+import java.text.NumberFormat
+import java.util.Locale
 
 // ---------------------------------------------------------------- app shell
 
@@ -114,7 +121,7 @@ import java.net.URLEncoder
 @Composable
 fun AppScreen(vm: MainViewModel) {
     // The browser stays composed once opened, so switching tabs keeps the page and what it found.
-    var browserOpened by remember { mutableStateOf(false) }
+    var browserOpened by rememberSaveable { mutableStateOf(false) }
     if (vm.tab == 1) browserOpened = true
     // Home fades; the browser switches instantly because a WebView under a translucent
     // graphicsLayer stops drawing its Compose siblings.
@@ -138,7 +145,7 @@ fun AppScreen(vm: MainViewModel) {
                 )
             }
         }
-        if (!WindowInsets.isImeVisible) BottomNav(vm.tab, vm.found.size) { vm.tab = it }
+        if (!WindowInsets.isImeVisible) BottomNav(vm.tab, Tabs.active?.found?.size ?: 0) { vm.tab = it }
     }
 }
 
@@ -168,7 +175,7 @@ private fun NavItem(label: String, icon: Int, selected: Boolean, badge: Int, mod
                 Text(
                     if (badge > 9) "9+" else "$badge",
                     style = Type.small.copy(color = RR.NightSky, fontWeight = FontWeight.Bold, fontSize = 10.sp),
-                    modifier = Modifier.align(Alignment.TopEnd).padding(start = 0.dp)
+                    modifier = Modifier.align(Alignment.TopEnd)
                         .graphicsLayer { translationX = 12.dp.toPx(); translationY = (-6).dp.toPx() }
                         .clip(RoundedCornerShape(percent = 50)).background(RR.Pink)
                         .padding(horizontal = 5.dp, vertical = 1.dp),
@@ -186,130 +193,6 @@ private val NavBg = Color(0xFF0E0C29)
 
 // ---------------------------------------------------------------- browser
 
-/** Reports `<video>`/`<audio>` sources, including ones set later by players like the KT player. */
-private const val SNIFF_JS = """
-(function () {
-  if (window.__rrSniff) return; window.__rrSniff = 1;
-  var seen = {};
-  function report(u, via) {
-    try {
-      if (!u) return;
-      u = new URL(u, location.href).href;
-      if (!/^https?:/i.test(u) || seen[u]) return;
-      seen[u] = 1;
-      RRBridge.found(u, via, location.href);
-    } catch (e) {}
-  }
-  function scan() {
-    var els = document.querySelectorAll('video, audio, source');
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i], tag = el.tagName.toLowerCase();
-      report(el.currentSrc, tag);
-      report(el.getAttribute('src'), tag);
-    }
-  }
-  ['loadstart', 'loadedmetadata', 'play'].forEach(function (t) {
-    document.addEventListener(t, function (e) {
-      var el = e.target;
-      if (el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO')) report(el.currentSrc || el.src, el.tagName.toLowerCase());
-    }, true);
-  });
-  var pending = 0;
-  function soon() { if (!pending) pending = setTimeout(function () { pending = 0; scan(); }, 300); }
-  new MutationObserver(soon).observe(document.documentElement || document,
-    { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
-  setInterval(scan, 2000);
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan); else scan();
-})();
-"""
-
-private class BrowserState {
-    var address by mutableStateOf("")
-    var progress by mutableIntStateOf(100)
-    var canBack by mutableStateOf(false)
-    var canForward by mutableStateOf(false)
-    var started by mutableStateOf(false)
-    /** Read from the network thread, which can't touch the WebView. */
-    @Volatile var pageUrl: String? = null
-}
-
-@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
-private fun createWebView(ctx: Context, state: BrowserState, onFound: (Found) -> Unit): WebView {
-    val main = Handler(Looper.getMainLooper())
-    fun post(url: String, via: String, referer: String?) {
-        // A <video> src without a recognisable extension is still a media file.
-        val kind = MediaTypes.classify(url)
-            ?: (if (via != "jaringan" && MediaTypes.pathExt(url) != "ts") MediaKind.File else null)
-            ?: return
-        main.post { onFound(Found(url, kind, via, referer)) }
-    }
-
-    return WebView(ctx).apply {
-        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        setBackgroundColor(android.graphics.Color.parseColor("#16143B"))
-        settings.javaScriptEnabled = true
-        settings.domStorageEnabled = true
-        settings.setSupportMultipleWindows(false)
-        settings.loadWithOverviewMode = true
-        settings.useWideViewPort = true
-        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-
-        addJavascriptInterface(object {
-            @JavascriptInterface
-            fun found(url: String?, via: String?, frameUrl: String?) {
-                if (url != null) post(url, via ?: "video", frameUrl ?: state.pageUrl)
-            }
-        }, "RRBridge")
-
-        val docStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
-        if (docStart) WebViewCompat.addDocumentStartJavaScript(this, SNIFF_JS, setOf("*"))
-
-        webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val scheme = request.url.scheme?.lowercase()
-                // intent:, market: and friends would leave the app; ads love them.
-                return scheme != "http" && scheme != "https"
-            }
-
-            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                val url = request.url.toString()
-                if (MediaTypes.classify(url) != null) {
-                    post(url, "jaringan", request.requestHeaders["Referer"] ?: state.pageUrl)
-                }
-                return null
-            }
-
-            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-                state.pageUrl = url
-                state.address = url
-                state.started = true
-            }
-
-            override fun onPageFinished(view: WebView, url: String) {
-                if (!docStart) view.evaluateJavascript(SNIFF_JS, null)
-            }
-
-            override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
-                state.pageUrl = url
-                state.address = url
-                state.canBack = view.canGoBack()
-                state.canForward = view.canGoForward()
-            }
-        }
-        webChromeClient = object : WebChromeClient() {
-            override fun onProgressChanged(view: WebView, newProgress: Int) {
-                state.progress = newProgress
-            }
-        }
-        setDownloadListener { url, _, _, mime, _ ->
-            val kind = MediaTypes.classify(url, mime)
-                ?: if (mime?.startsWith("audio/") == true) MediaKind.File else null
-            if (kind != null) main.post { onFound(Found(url, kind, "download", state.pageUrl)) }
-            else main.post { Toast.makeText(ctx, "Bukan file video, dilewati", Toast.LENGTH_SHORT).show() }
-        }
-    }
-}
-
 /** Dev boxes and LAN players rarely have TLS. */
 private val LOCAL_HOST = Regex("""^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)""")
 
@@ -324,77 +207,100 @@ private fun normalize(input: String): String {
     }
 }
 
+private enum class BrowserSheet { Found, Menu, Tabs }
+
 @Composable
 fun BrowserScreen(vm: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
-    val state = remember { BrowserState() }
-    val web = remember { createWebView(ctx, state, vm::onFound) }
-    var sheetOpen by remember { mutableStateOf(false) }
-    var lastPage by remember { mutableStateOf<String?>(null) }
-
-    DisposableEffect(web) { onDispose { web.destroy() } }
-    LaunchedEffect(visible) {
-        if (visible) {
-            web.onResume()
-        } else {
-            // Leaving the tab shouldn't leave a video talking in the background.
-            web.evaluateJavascript("document.querySelectorAll('video,audio').forEach(function(m){m.pause()})", null)
-            web.onPause()
-        }
+    // Tabs outlive the activity; this only points them at the current one.
+    remember(ctx) {
+        Tabs.attach(ctx)
+        Bookmarks.init(ctx)
+        NetSettings.applyToWebView()
     }
-    // A new page means a new list; same-page updates (SPA routes, reloads) keep what was found.
-    LaunchedEffect(state.address) {
-        val page = state.address.substringBefore('#').ifEmpty { null }
-        if (page != null && page != lastPage) {
-            if (lastPage != null) vm.clearFound()
-            lastPage = page
+    DisposableEffect(ctx) { onDispose { Tabs.detach(ctx) } }
+
+    val tab = Tabs.active ?: return
+    var sheet by remember { mutableStateOf<BrowserSheet?>(null) }
+
+    // Only the visible tab may play or run timers.
+    LaunchedEffect(visible, tab.id) {
+        Tabs.list.forEach { t ->
+            val w = t.web ?: return@forEach
+            if (visible && t === tab) {
+                w.onResume()
+            } else {
+                w.evaluateJavascript("document.querySelectorAll('video,audio').forEach(function(m){m.pause()})", null)
+                w.onPause()
+            }
         }
     }
     BackHandler(enabled = visible) {
         when {
-            sheetOpen -> sheetOpen = false
-            state.canBack -> web.goBack()
+            sheet != null -> sheet = null
+            tab.state.canBack -> tab.web?.goBack()
+            tab.openerId != null -> Tabs.close(tab)
             else -> vm.tab = 0
         }
     }
+    val load = { url: String -> Tabs.webFor(tab).loadUrl(url) }
 
     Box(
         modifier.fillMaxSize().background(RR.NightSky)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
     ) {
         Column(Modifier.fillMaxSize()) {
-            AddressBar(state, web, visible)
+            key(tab.id) {
+                AddressBar(tab, visible, onTabs = { sheet = BrowserSheet.Tabs }, onMenu = { sheet = BrowserSheet.Menu }, load = load)
+            }
             Box(Modifier.weight(1f)) {
-                AndroidView(
-                    factory = { web },
-                    // An empty WebView paints its background past its bounds, over the address bar.
-                    update = { it.visibility = if (visible && state.started) View.VISIBLE else View.INVISIBLE },
-                    modifier = Modifier.fillMaxSize(),
-                )
-                if (!state.started) StartHint()
+                if (tab.web != null || tab.pendingUrl != null) {
+                    AndroidView(
+                        factory = { FrameLayout(it) },
+                        update = { box ->
+                            val w = Tabs.webFor(tab)
+                            if (w.parent !== box) {
+                                box.removeAllViews()
+                                (w.parent as? ViewGroup)?.removeView(w)
+                                box.addView(w)
+                            }
+                            // An empty WebView paints its background past its bounds, over the address bar.
+                            box.visibility = if (visible && tab.state.started) View.VISIBLE else View.INVISIBLE
+                        },
+                        onRelease = { it.removeAllViews() },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                if (!tab.state.started) NewTabPage(load)
             }
         }
 
         FoundPill(
-            count = vm.found.size,
+            count = tab.found.size,
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
-        ) { sheetOpen = true }
+        ) { sheet = BrowserSheet.Found }
 
         // In-layout sheet: a dialog window would bring its own (light) navigation bar.
-        FoundSheet(open = sheetOpen, onDismiss = { sheetOpen = false }) {
-            FoundList(
-                vm.found,
-                onDownload = { f ->
-                    sheetOpen = false
-                    vm.downloadFound(f, web.settings.userAgentString)
-                },
-            )
+        Sheet(open = sheet != null, onDismiss = { sheet = null }) {
+            when (rememberLast(sheet)) {
+                BrowserSheet.Found -> FoundList(
+                    tab.found,
+                    onSave = { f -> vm.saveFound(f, Tabs.webFor(tab).settings.userAgentString) },
+                    onDownload = { f ->
+                        sheet = null
+                        vm.downloadFound(f, Tabs.webFor(tab).settings.userAgentString)
+                    },
+                )
+                BrowserSheet.Menu -> MenuContent(tab) { sheet = null }
+                BrowserSheet.Tabs -> TabsContent { sheet = null }
+                null -> {}
+            }
         }
     }
 }
 
 @Composable
-private fun FoundSheet(open: Boolean, onDismiss: () -> Unit, content: @Composable () -> Unit) {
+private fun Sheet(open: Boolean, onDismiss: () -> Unit, content: @Composable () -> Unit) {
     val scrim by animateFloatAsState(if (open) 0.55f else 0f, tween(if (open) 240 else 180), label = "scrim")
     Box(Modifier.fillMaxSize()) {
         if (scrim > 0f) {
@@ -411,7 +317,7 @@ private fun FoundSheet(open: Boolean, onDismiss: () -> Unit, content: @Composabl
         ) {
             // Drag the handle area down to dismiss; the sheet follows the finger and springs back.
             val drag = remember { Animatable(0f) }
-            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            val scope = rememberCoroutineScope()
             Column(
                 Modifier.fillMaxWidth()
                     .graphicsLayer { translationY = drag.value }
@@ -440,7 +346,8 @@ private fun FoundSheet(open: Boolean, onDismiss: () -> Unit, content: @Composabl
 }
 
 @Composable
-private fun AddressBar(state: BrowserState, web: WebView, visible: Boolean) {
+private fun AddressBar(tab: Tab, visible: Boolean, onTabs: () -> Unit, onMenu: () -> Unit, load: (String) -> Unit) {
+    val state = tab.state
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     var focused by remember { mutableStateOf(false) }
@@ -455,8 +362,8 @@ private fun AddressBar(state: BrowserState, web: WebView, visible: Boolean) {
         focus.clearFocus()
         editing = false
         if (text.isNotBlank()) {
-            web.loadUrl(normalize(text))
-            web.requestFocus()
+            load(normalize(text))
+            tab.web?.requestFocus()
         }
     }
     val loading = state.progress < 100 && state.started
@@ -465,14 +372,11 @@ private fun AddressBar(state: BrowserState, web: WebView, visible: Boolean) {
 
     Column {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { web.goBack() }, enabled = state.canBack) {
+            IconButton(onClick = { tab.web?.goBack() }, enabled = state.canBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Kembali", tint = if (state.canBack) RR.Cream else RR.Ring)
-            }
-            IconButton(onClick = { web.goForward() }, enabled = state.canForward) {
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, "Maju", tint = if (state.canForward) RR.Cream else RR.Ring)
             }
             BasicTextField(
                 value = field,
@@ -490,7 +394,7 @@ private fun AddressBar(state: BrowserState, web: WebView, visible: Boolean) {
                 },
                 singleLine = true,
                 textStyle = Type.body.copy(fontSize = 14.sp),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(RR.Flame),
+                cursorBrush = SolidColor(RR.Flame),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { go() }),
                 modifier = Modifier.weight(1f).onFocusChanged { f ->
@@ -509,13 +413,8 @@ private fun AddressBar(state: BrowserState, web: WebView, visible: Boolean) {
                     }
                 },
             )
-            IconButton(onClick = { if (loading) web.stopLoading() else web.reload() }, enabled = state.started) {
-                Icon(
-                    if (loading) Icons.Default.Close else Icons.Default.Refresh,
-                    if (loading) "Berhenti" else "Muat ulang",
-                    tint = if (state.started) RR.Cream else RR.Ring,
-                )
-            }
+            IconButton(onClick = onTabs) { TabCount(Tabs.list.size) }
+            IconButton(onClick = onMenu) { Icon(Icons.Default.MoreVert, "Menu", tint = RR.Cream) }
         }
         // Flame progress line; fades out once the page settles.
         val shown by animateFloatAsState(if (loading) 1f else 0f, tween(if (loading) 120 else 400), label = "bar")
@@ -526,19 +425,213 @@ private fun AddressBar(state: BrowserState, web: WebView, visible: Boolean) {
     }
 }
 
+/** The tab switcher button: a rounded square holding the number of open tabs. */
 @Composable
-private fun StartHint() {
-    Column(
-        Modifier.fillMaxSize().background(RR.NightSky).padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
+private fun TabCount(n: Int) {
+    Box(
+        Modifier.size(22.dp).border(2.dp, RR.Cream, RoundedCornerShape(6.dp)),
+        contentAlignment = Alignment.Center,
     ) {
+        Text(
+            if (n > 99) ":D" else "$n",
+            style = Type.small.copy(color = RR.Cream, fontSize = 11.sp, fontWeight = FontWeight.Bold),
+        )
+    }
+}
+
+@Composable
+private fun NewTabPage(load: (String) -> Unit) {
+    Column(
+        Modifier.fillMaxSize().background(RR.NightSky).verticalScroll(rememberScrollState()).padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(32.dp))
         Image(painterResource(R.drawable.ic_mascot), null, Modifier.size(84.dp, 92.dp))
         Text(
             "Buka halaman videonya lalu putar. Link HLS atau MP4 yang muncul akan dikumpulkan di sini.",
             style = Type.small.copy(textAlign = TextAlign.Center),
-            modifier = Modifier.widthIn(max = 280.dp),
+            modifier = Modifier.widthIn(max = 280.dp).padding(top = 14.dp),
         )
+        if (Bookmarks.list.isNotEmpty()) {
+            Text(
+                "Bookmark",
+                style = Type.section.copy(fontSize = 17.sp),
+                modifier = Modifier.fillMaxWidth().padding(top = 32.dp, bottom = 10.dp),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Bookmarks.list.forEach { b ->
+                    PageRow(
+                        title = b.title,
+                        url = b.url,
+                        selected = false,
+                        onClick = { load(b.url) },
+                        onRemove = { Bookmarks.remove(b) },
+                        removeLabel = "Hapus bookmark",
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** A page in a list: title and host, tap to open, × to remove. Shared by bookmarks and tabs. */
+@Composable
+private fun PageRow(title: String, url: String?, selected: Boolean, onClick: () -> Unit, onRemove: () -> Unit, removeLabel: String) {
+    val host = url?.let { Uri.parse(it).host?.removePrefix("www.") }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            .background(if (selected) RR.Track else RR.OrbitDeck)
+            .then(if (selected) Modifier.border(2.dp, RR.Flame, RoundedCornerShape(16.dp)) else Modifier)
+            .clickable(onClick = onClick)
+            .padding(start = 16.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+            Text(
+                title.ifBlank { host ?: "Tab baru" },
+                style = Type.body.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (host != null) Text(host, style = Type.small.copy(fontSize = 12.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        IconButton(onClick = onRemove) { Icon(Icons.Default.Close, removeLabel, tint = RR.Muted) }
+    }
+}
+
+@Composable
+private fun TabsContent(onDone: () -> Unit) {
+    Column(Modifier.padding(horizontal = 20.dp)) {
+        Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("${Tabs.list.size} tab terbuka", style = Type.section, modifier = Modifier.weight(1f))
+            SmallButton("+ Tab baru", RR.Flame, RR.NightSky) {
+                Tabs.newTab()
+                onDone()
+            }
+        }
+        LazyColumn(
+            Modifier.fillMaxWidth().heightIn(max = 480.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = 24.dp),
+        ) {
+            items(Tabs.list, key = { it.id }) { t ->
+                PageRow(
+                    title = t.state.title,
+                    url = t.url,
+                    selected = t === Tabs.active,
+                    onClick = {
+                        Tabs.select(t)
+                        onDone()
+                    },
+                    onRemove = { Tabs.close(t) },
+                    removeLabel = "Tutup tab",
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuContent(tab: Tab, onDone: () -> Unit) {
+    val state = tab.state
+    val loading = state.progress < 100 && state.started
+    val url = state.pageUrl
+    val saved = Bookmarks.contains(url)
+    val ctx = LocalContext.current
+
+    Column(
+        Modifier.fillMaxWidth().heightIn(max = 600.dp).verticalScroll(rememberScrollState())
+            .padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            MenuAction(Icons.AutoMirrored.Filled.ArrowForward, "Maju", state.canForward) {
+                tab.web?.goForward()
+                onDone()
+            }
+            MenuAction(if (loading) Icons.Default.Close else Icons.Default.Refresh, if (loading) "Berhenti" else "Muat ulang", state.started) {
+                if (loading) tab.web?.stopLoading() else tab.web?.reload()
+                onDone()
+            }
+            MenuAction(Icons.Default.Star, if (saved) "Tersimpan" else "Bookmark", url != null, tint = if (saved) RR.Flame else RR.Cream) {
+                if (url != null) {
+                    Bookmarks.toggle(url, state.title)
+                    Toast.makeText(ctx, if (saved) "Bookmark dihapus" else "Disimpan ke bookmark", Toast.LENGTH_SHORT).show()
+                }
+            }
+            MenuAction(Icons.Default.Add, "Tab baru", true) {
+                Tabs.newTab()
+                onDone()
+            }
+        }
+
+        Text("Perlindungan", style = Type.section.copy(fontSize = 17.sp), modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Blokir iklan & popup", style = Type.body.copy(color = Color.White))
+                val n = NumberFormat.getIntegerInstance(Locale("id")).format(AdBlock.rules.size)
+                Text(
+                    if (NetSettings.adBlock) "${tab.blocked} diblokir di halaman ini · $n domain" else "Mati",
+                    style = Type.small.copy(fontSize = 12.sp),
+                )
+            }
+            Switch(
+                checked = NetSettings.adBlock,
+                onCheckedChange = {
+                    NetSettings.enableAdBlock(it)
+                    tab.web?.reload()
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = RR.NightSky, checkedTrackColor = RR.Flame, checkedBorderColor = RR.Flame,
+                    uncheckedThumbColor = RR.Muted, uncheckedTrackColor = RR.Track, uncheckedBorderColor = RR.Track,
+                ),
+            )
+        }
+
+        Text("DNS", style = Type.section.copy(fontSize = 17.sp), modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            DnsChoice.entries.forEach { c ->
+                val on = NetSettings.dns == c
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                        .background(if (on) RR.Track else RR.NightSky)
+                        .clickable(role = Role.RadioButton) {
+                            if (!on) {
+                                NetSettings.chooseDns(c)
+                                tab.web?.reload()
+                            }
+                        }
+                        .heightIn(min = 52.dp).padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(c.label, style = Type.body.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium))
+                        Text(c.detail, style = Type.small.copy(fontSize = 12.sp))
+                    }
+                    if (on) Icon(Icons.Default.Check, null, tint = RR.Flame)
+                }
+            }
+        }
+        Text(
+            if (NetSettings.proxySupported) "Dipakai untuk browser dan download. Membantu membuka situs yang diblokir lewat DNS operator."
+            else "WebView di HP ini belum mendukung DNS khusus, jadi DNS ini hanya dipakai untuk download.",
+            style = Type.small.copy(fontSize = 12.sp),
+            modifier = Modifier.padding(top = 10.dp),
+        )
+    }
+}
+
+@Composable
+private fun MenuAction(icon: ImageVector, label: String, enabled: Boolean, tint: Color = RR.Cream, onClick: () -> Unit) {
+    val c = if (enabled) tint else RR.Ring
+    Column(
+        Modifier.widthIn(min = 72.dp).clip(RoundedCornerShape(16.dp))
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(icon, null, tint = c)
+        Text(label, style = Type.small.copy(color = c, fontSize = 12.sp))
     }
 }
 
@@ -574,7 +667,7 @@ private fun FoundPill(count: Int, modifier: Modifier, onClick: () -> Unit) {
 }
 
 @Composable
-private fun FoundList(found: List<Found>, onDownload: (Found) -> Unit) {
+private fun FoundList(found: List<Found>, onSave: (Found) -> Boolean, onDownload: (Found) -> Unit) {
     val clipboard = LocalClipboardManager.current
     val ctx = LocalContext.current
     Column(Modifier.padding(horizontal = 20.dp)) {
@@ -587,7 +680,7 @@ private fun FoundList(found: List<Found>, onDownload: (Found) -> Unit) {
         LazyColumn(
             Modifier.fillMaxWidth().heightIn(max = 480.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
+            contentPadding = PaddingValues(bottom = 24.dp),
         ) {
             items(found, key = { it.url }) { f ->
                 Column(
@@ -611,6 +704,10 @@ private fun FoundList(found: List<Found>, onDownload: (Found) -> Unit) {
                         SmallButton("Salin", RR.OrbitDeck, RR.Cream) {
                             clipboard.setText(AnnotatedString(f.url))
                             Toast.makeText(ctx, "Link disalin", Toast.LENGTH_SHORT).show()
+                        }
+                        SmallButton("Simpan", RR.OrbitDeck, RR.Cream) {
+                            val added = onSave(f)
+                            Toast.makeText(ctx, if (added) "Disimpan di tab Download" else "Sudah ada di daftar simpan", Toast.LENGTH_SHORT).show()
                         }
                         SmallButton("Download", RR.Flame, RR.NightSky) { onDownload(f) }
                     }

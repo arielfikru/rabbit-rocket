@@ -33,6 +33,8 @@ class DownloadService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        io.github.arielfikru.rabbitrocket.net.NetSettings.init(this)
+        DownloadStore.attach(this)
         engine = DownloadEngine(applicationContext)
         Notifs.ensureChannels(this)
     }

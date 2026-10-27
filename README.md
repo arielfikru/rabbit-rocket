@@ -13,8 +13,13 @@ Android app untuk download video dari link **HLS (.m3u8)**, **M3U**, atau **file
 
 - **Preview dulu**: putar stream-nya, lihat durasi, jumlah segmen, perkiraan ukuran, dan grid cuplikan 3x3 (tap cuplikan untuk loncat ke menit itu).
 - **Browser bawaan**: buka halaman videonya, Rabbit Rocket mencatat link HLS/MP4 dari elemen `<video>` dan lalu lintas jaringan. Dari daftar "media ditemukan", tinggal **Salin** atau **Download** (Referer, cookie, dan User-Agent halaman ikut terbawa, jadi link bertoken tetap jalan).
+- **Multi-tab, bookmark, dan tab yang awet**: tab tetap ada walau pindah ke Download, layar diputar, atau app ditutup.
+- **Blokir iklan & popup** (aktif bawaan): daftar AdGuard DNS diunduh otomatis dan diperbarui mingguan; popup skrip dibuang, link `target=_blank` asli dibuka di tab baru.
+- **DNS-over-HTTPS**: Cloudflare (bawaan), AdGuard, Google, Quad9, atau DNS jaringan. Dipakai browser dan download, membantu membuka situs yang diblokir lewat DNS operator.
+- **Simpan untuk nanti**: simpan link dari preview atau dari Browser, lalu preview/download kapan saja. Daftarnya tetap ada setelah app ditutup.
 - **File langsung** (MP4/MKV/WebM/MOV/MP3…): preview, grid cuplikan, ukuran pasti, dan download **4 koneksi paralel** kalau server mendukung Range.
-- **Pilih kualitas** dari master playlist (1080p, 720p, …).
+- **Pilih kualitas** dari master playlist (1080p, 720p, …); preview menampilkan resolusi (mis. 720p · 1280×720).
+- **Hapus & ganti nama download**: hapus dari daftar saja atau sekalian file videonya; ganti nama file yang sudah selesai.
 - **AES-128** terenkripsi didukung; DRM (SAMPLE-AES/Widevine) tidak.
 - **Simpan sebagai MP4** (transmux tanpa re-encode); kalau gagal, file `.ts` tetap disimpan. Stream fMP4 langsung jadi `.mp4`.
 - **Notifikasi**: progress, tombol Batal, lalu "Mendarat!" dengan tombol Buka/Share. Di Android 16 pakai ProgressStyle dengan tracker roket.

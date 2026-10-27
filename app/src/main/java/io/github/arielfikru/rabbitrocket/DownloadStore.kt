@@ -6,6 +6,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
 enum class Status(val label: String) {
@@ -93,11 +97,53 @@ object DownloadStore {
     private val _jobs = MutableStateFlow<List<DlJob>>(emptyList())
     val jobs: StateFlow<List<DlJob>> = _jobs.asStateFlow()
     private val ids = AtomicLong(System.currentTimeMillis())
+    /** Finished jobs are kept across restarts; everything else lives only as long as the process. */
+    private var history: File? = null
+
+    @Synchronized
+    fun attach(ctx: Context) {
+        if (history != null) return
+        val f = File(ctx.applicationContext.filesDir, "history.json")
+        history = f
+        val done = runCatching {
+            val arr = JSONArray(f.readText())
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                DlJob(
+                    id = o.getLong("id"), name = o.getString("name"), url = o.getString("url"),
+                    referer = null, userAgent = null, toMp4 = false, direct = o.optBoolean("direct"),
+                    status = Status.Done, outputUri = o.getString("uri"), outputMime = o.optString("mime"),
+                    fileName = o.optString("file"), size = o.optLong("size"),
+                )
+            }
+        }.getOrDefault(emptyList())
+        _jobs.update { list -> done.filter { d -> list.none { it.id == d.id } } + list }
+    }
 
     fun newId() = ids.incrementAndGet()
     fun get(id: Long) = _jobs.value.firstOrNull { it.id == id }
     fun add(job: DlJob) = _jobs.update { it + job }
-    fun remove(id: Long) = _jobs.update { list -> list.filterNot { it.id == id } }
-    fun update(id: Long, f: (DlJob) -> DlJob) =
+
+    fun remove(id: Long) {
+        val wasDone = get(id)?.status == Status.Done
+        _jobs.update { list -> list.filterNot { it.id == id } }
+        if (wasDone) saveHistory()
+    }
+
+    fun update(id: Long, f: (DlJob) -> DlJob) {
         _jobs.update { list -> list.map { if (it.id == id) f(it) else it } }
+        if (get(id)?.status == Status.Done) saveHistory()
+    }
+
+    private fun saveHistory() {
+        val f = history ?: return
+        val arr = JSONArray()
+        _jobs.value.filter { it.status == Status.Done && it.outputUri != null }.forEach { j ->
+            arr.put(
+                JSONObject().put("id", j.id).put("name", j.name).put("url", j.url).put("direct", j.direct)
+                    .put("uri", j.outputUri).put("mime", j.outputMime).put("file", j.fileName).put("size", j.size),
+            )
+        }
+        synchronized(this) { File(f.parentFile, "history.tmp").apply { writeText(arr.toString()); renameTo(f) } }
+    }
 }

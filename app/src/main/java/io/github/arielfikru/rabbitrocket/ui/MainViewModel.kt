@@ -16,6 +16,7 @@ import io.github.arielfikru.rabbitrocket.DownloadStore
 import io.github.arielfikru.rabbitrocket.Status
 import io.github.arielfikru.rabbitrocket.hls.HlsClient
 import io.github.arielfikru.rabbitrocket.hls.MediaKind
+import io.github.arielfikru.rabbitrocket.hls.MediaTypes
 import io.github.arielfikru.rabbitrocket.hls.Playlist
 import io.github.arielfikru.rabbitrocket.hls.Probe
 import io.github.arielfikru.rabbitrocket.hls.Thumbnails
@@ -57,22 +58,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val jobs = DownloadStore.jobs
 
+    /** Links put aside to preview or download later, newest first. */
+    val saved = mutableStateListOf<Saved>().apply { addAll(SavedStore.load(app)) }
+    /** The saved entry the open preview came from; downloading it takes it off the list. */
+    private var previewOf: Long? = null
+
     /** 0 = home, 1 = browser. */
     var tab by mutableStateOf(0)
-    /** Media links the browser spotted on the current page, newest first. */
-    val found = mutableStateListOf<Found>()
     /** Set when a link comes from the browser so the download looks like the page's own request. */
     private var browserUa: String? = null
     private var browserCookie: String? = null
-
-    fun onFound(f: Found) {
-        val i = found.indexOfFirst { it.url == f.url }
-        if (i >= 0) return
-        found.add(0, f)
-        if (found.size > 40) found.removeAt(found.lastIndex)
-    }
-
-    fun clearFound() = found.clear()
 
     /** Hands a sniffed link to the home tab and opens its preview. */
     fun downloadFound(f: Found, ua: String?) {
@@ -85,9 +80,102 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         check()
     }
 
+    /** Puts a sniffed link on the saved list without leaving the browser. */
+    fun saveFound(f: Found, ua: String?): Boolean {
+        if (saved.any { it.url == f.url }) return false
+        val cookie = runCatching { CookieManager.getInstance().getCookie(f.url) }.getOrNull()
+        val kind = if (f.kind == MediaKind.Hls) "HLS" else MediaTypes.extFor(f.url, null, null).uppercase()
+        addSaved(Saved(DownloadStore.newId(), f.url, sanitize(guessName(f.url)), f.referer, ua, cookie, kind))
+        return true
+    }
+
+    /** Keeps the open preview on the saved list, with what it learned, and clears the form. */
+    fun saveForLater() {
+        val p = preview ?: return
+        val id = previewOf ?: DownloadStore.newId()
+        val ctx = getApplication<Application>()
+        val thumb = thumbs.minByOrNull { it.slot }?.let { SavedStore.writeThumb(ctx, id, it.bitmap) }
+        val size = p.size
+        val entry = Saved(
+            id = id,
+            url = url.trim(),
+            name = jobName(p.direct?.fileName?.substringBeforeLast('.'), p.variant?.quality),
+            referer = referer.trim().ifBlank { null },
+            ua = userAgent.trim().ifBlank { null } ?: browserUa,
+            cookie = browserCookie,
+            kind = p.direct?.ext?.uppercase() ?: "HLS",
+            checked = true,
+            streamUrl = p.streamUrl,
+            quality = p.variant?.quality,
+            direct = p.direct,
+            duration = p.duration,
+            width = size?.first ?: 0,
+            height = size?.second ?: 0,
+            bytes = p.estimatedBytes ?: 0,
+            thumb = thumb,
+        )
+        saved.removeAll { it.id == id || it.url == entry.url }
+        addSaved(entry)
+        closePreview()
+        previewOf = null
+        url = ""
+        fileName = ""
+        browserUa = null
+        browserCookie = null
+    }
+
+    /** Reopens a saved link in the preview, with the identity it was saved with. */
+    fun previewSaved(s: Saved) {
+        editUrl(s.url)
+        fileName = if (s.checked) s.name.removeSuffix("_${s.quality}") else ""
+        referer = s.referer.orEmpty()
+        browserUa = s.ua
+        browserCookie = s.cookie
+        previewOf = s.id
+        tab = 0
+        check()
+    }
+
+    /** Checked links download straight away; unchecked ones need a look first. */
+    fun downloadSaved(s: Saved) {
+        val stream = s.streamUrl
+        if (!s.checked || stream == null) return previewSaved(s)
+        val job = DlJob(
+            id = DownloadStore.newId(),
+            name = s.name,
+            url = stream,
+            referer = s.referer,
+            userAgent = userAgent.trim().ifBlank { null } ?: s.ua,
+            toMp4 = toMp4,
+            direct = s.direct != null,
+            cookie = s.cookie,
+            totalBytes = s.direct?.size?.coerceAtLeast(0) ?: 0,
+        )
+        DownloadStore.add(job)
+        DownloadService.start(getApplication(), job.id)
+        removeSaved(s)
+    }
+
+    fun removeSaved(s: Saved) {
+        saved.removeAll { it.id == s.id }
+        s.thumb?.let { File(it).delete() }
+        persistSaved()
+    }
+
+    private fun addSaved(s: Saved) {
+        saved.add(0, s)
+        persistSaved()
+    }
+
+    private fun persistSaved() {
+        val snapshot = saved.toList()
+        viewModelScope.launch(Dispatchers.IO) { SavedStore.save(getApplication(), snapshot) }
+    }
+
     /** Typing a new link drops the browser's identity. */
     fun editUrl(v: String) {
         url = v
+        previewOf = null
         browserUa = null
         browserCookie = null
     }
@@ -127,6 +215,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                android.util.Log.w("RabbitRocket", "check failed", e)
                 error = e.message ?: "Gagal membaca link"
             } finally {
                 analyzing = false
@@ -145,12 +234,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun download() {
         val p = preview ?: return
+        val from = previewOf?.let { id -> saved.firstOrNull { it.id == id } }
+        previewOf = null
         closePreview()
         // Let the preview start folding before the new job card and the service start.
         launching = true
         viewModelScope.launch {
             delay(220)
             enqueue(p.streamUrl, p.variant?.quality, p.direct)
+            from?.let { removeSaved(it) }
             launching = false
         }
     }
@@ -170,7 +262,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 deleteRecursively()
                 mkdirs()
             }
-            Thumbnails.generate(client, media, dir).collect { thumbs = thumbs + it }
+            // Thumbs come from the lightest variant, so only a single-stream link says what the download looks like.
+            val single = p.variants.size <= 1
+            Thumbnails.generate(client, media, dir) { w, h ->
+                if (single) viewModelScope.launch {
+                    preview = preview?.takeIf { it.sourceUrl == p.sourceUrl }?.copy(probedSize = w to h)
+                }
+            }.collect { thumbs = thumbs + it }
         }
     }
 
@@ -180,8 +278,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         thumbSlots = Thumbnails.COUNT
         val headers = draft(d.url).headers()
         thumbJob = viewModelScope.launch {
-            Thumbnails.generateDirect(d.url, headers) { sec ->
-                viewModelScope.launch { preview = preview?.takeIf { it.direct == d }?.copy(directDuration = sec) }
+            Thumbnails.generateDirect(d.url, headers) { sec, size ->
+                viewModelScope.launch {
+                    preview = preview?.takeIf { it.direct == d }?.copy(directDuration = sec, probedSize = size)
+                }
             }.collect { thumbs = thumbs + it }
             // Formats the retriever can't read (or servers that refuse it) leave no tiles: drop the grid.
             if (thumbs.isEmpty()) thumbSlots = 0
@@ -212,6 +312,50 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) { DownloadEngine.workDir(getApplication(), id).deleteRecursively() }
     }
 
+    /** Drops a finished job from the list, and optionally the saved file with it. */
+    fun deleteJob(job: DlJob, withFile: Boolean) {
+        remove(job.id)
+        if (!withFile) return
+        val uri = job.outputUri?.let(android.net.Uri::parse) ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = runCatching { getApplication<Application>().contentResolver.delete(uri, null, null) >= 0 }.getOrDefault(false)
+            if (!ok) {
+                launch(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        getApplication(), "File tidak bisa dihapus dari sini; hapus lewat aplikasi File", android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+    }
+
+    /** Renames a finished download in the Downloads folder; the extension stays. */
+    fun renameJob(job: DlJob, newName: String) {
+        val uri = job.outputUri?.let(android.net.Uri::parse) ?: return
+        val base = sanitize(newName.trim().removeSuffix(".${job.fileName?.substringAfterLast('.', "")}"))
+        val ext = job.fileName?.substringAfterLast('.', "")?.ifEmpty { null }
+        val target = if (ext != null) "$base.$ext" else base
+        if (target == job.fileName) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolver = getApplication<Application>().contentResolver
+            val actual = runCatching {
+                resolver.update(uri, android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, target)
+                }, null, null)
+                // MediaStore adds " (1)" on a clash; show what it really is.
+                resolver.query(uri, arrayOf(android.provider.MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            }.getOrNull()
+            if (actual == null) {
+                launch(Dispatchers.Main) {
+                    android.widget.Toast.makeText(getApplication(), "Gagal mengganti nama file", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
+            DownloadStore.update(job.id) { it.copy(name = actual.substringBeforeLast('.'), fileName = actual) }
+        }
+    }
+
     fun clearFinished() {
         jobs.value.filter { it.status == Status.Done }.forEach { remove(it.id) }
     }
@@ -222,11 +366,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     private fun enqueue(mediaUrl: String, quality: String?, direct: Probe.Direct?) {
-        val hint = direct?.fileName?.substringBeforeLast('.')
-        val base = sanitize(fileName.ifBlank { hint ?: guessName(url.trim()) })
         val job = draft(mediaUrl).copy(
             id = DownloadStore.newId(),
-            name = if (quality != null && quality != "Auto") "${base}_$quality" else base,
+            name = jobName(direct?.fileName?.substringBeforeLast('.'), quality),
             direct = direct != null,
             totalBytes = direct?.size?.coerceAtLeast(0) ?: 0,
         )
@@ -240,6 +382,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             putString("ua", userAgent)
             putBoolean("mp4", toMp4)
         }
+    }
+
+    private fun jobName(hint: String?, quality: String?): String {
+        val base = sanitize(fileName.ifBlank { hint ?: guessName(url.trim()) })
+        return if (quality != null && quality != "Auto") "${base}_$quality" else base
     }
 
     private companion object {
@@ -268,6 +415,8 @@ data class Preview(
     val direct: Probe.Direct? = null,
     /** Read from the file's metadata once the retriever opens it. */
     val directDuration: Double = 0.0,
+    /** Width × height read from the media itself, when the playlist doesn't say. */
+    val probedSize: Pair<Int, Int>? = null,
 ) {
     val isDirect: Boolean get() = direct != null
     val variant: Variant? get() = variants.getOrNull(selected)
@@ -276,6 +425,11 @@ data class Preview(
     val segments: Int get() = media?.segments?.size ?: 0
     val encrypted: Boolean get() = media?.segments?.any { it.key != null } == true
     val isLive: Boolean get() = media?.isLive == true
+
+    /** The selected variant's declared resolution, else what the frames showed. */
+    val size: Pair<Int, Int>?
+        get() = variant?.resolution?.split('x')?.mapNotNull { it.trim().toIntOrNull() }
+            ?.takeIf { it.size == 2 }?.let { it[0] to it[1] } ?: probedSize
 
     /** bandwidth × duration; null when the playlist doesn't say. */
     val estimatedBytes: Long?

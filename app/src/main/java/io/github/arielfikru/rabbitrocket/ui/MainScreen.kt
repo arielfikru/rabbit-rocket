@@ -1,5 +1,10 @@
 package io.github.arielfikru.rabbitrocket.ui
 
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.material.icons.filled.Edit
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -89,6 +94,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -139,7 +145,10 @@ import io.github.arielfikru.rabbitrocket.R
 import io.github.arielfikru.rabbitrocket.Status
 import io.github.arielfikru.rabbitrocket.extractUrl
 import io.github.arielfikru.rabbitrocket.fmtBytes
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import io.github.arielfikru.rabbitrocket.fmtDuration
+import io.github.arielfikru.rabbitrocket.fmtResolution
 import io.github.arielfikru.rabbitrocket.hls.Http
 import io.github.arielfikru.rabbitrocket.hls.Thumbnails
 import io.github.arielfikru.rabbitrocket.statusLine
@@ -189,8 +198,20 @@ fun HomeScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         }
         // Items below the preview move with no placement animation: a lagging spring lets the
         // growing card slide over them. The empty state leaves as soon as checking starts.
+        if (vm.saved.isNotEmpty()) {
+            item(key = "saved-head") {
+                Text(
+                    "Disimpan · ${vm.saved.size}",
+                    style = Type.section,
+                    modifier = Modifier.animateItem(placementSpec = null).padding(top = 4.dp),
+                )
+            }
+            items(vm.saved, key = { "s${it.id}" }) { s ->
+                SavedCard(s, vm, Modifier.animateItem(fadeInSpec = tween(320, delayMillis = 60), placementSpec = null, fadeOutSpec = tween(160)))
+            }
+        }
         if (jobs.isEmpty()) {
-            if (vm.preview == null && !vm.analyzing && !vm.launching) {
+            if (vm.saved.isEmpty() && vm.preview == null && !vm.analyzing && !vm.launching) {
                 item(key = "empty") { EmptyState(Modifier.animateItem(placementSpec = null, fadeOutSpec = tween(140))) }
             }
         } else {
@@ -400,7 +421,10 @@ private fun PreviewCard(p: Preview, vm: MainViewModel) {
             }
         }
         Stagger(shown, 5) {
-            PrimaryButton("Luncurkan download", enabled = true, onClick = vm::download)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SecondaryButton("Simpan", Modifier.weight(1f), onClick = vm::saveForLater)
+                PrimaryButton("Luncurkan", enabled = true, modifier = Modifier.weight(1.6f), onClick = vm::download)
+            }
         }
     }
 }
@@ -479,6 +503,7 @@ private fun PlayerBox(state: PreviewPlayerState) {
 private fun InfoChips(p: Preview) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (p.duration > 0) Pill(fmtDuration(p.duration), RR.NightSky, RR.Pink)
+        p.size?.let { (w, h) -> Pill(fmtResolution(w, h), RR.NightSky, RR.Cream) }
         if (p.segments > 0) Pill("${p.segments} segmen", RR.NightSky, RR.Muted)
         p.direct?.let { d ->
             Pill(d.ext.uppercase(), RR.Violet, Color.White)
@@ -587,6 +612,7 @@ private fun SectionRow(jobs: List<DlJob>, vm: MainViewModel, modifier: Modifier)
 
 @Composable
 private fun JobCard(job: DlJob, vm: MainViewModel, modifier: Modifier) {
+    var renaming by remember(job.id) { mutableStateOf(false) }
     Column(
         modifier.fillMaxWidth()
             .animateContentSize(tween(300, easing = ExpoOut))
@@ -598,7 +624,16 @@ private fun JobCard(job: DlJob, vm: MainViewModel, modifier: Modifier) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             StatusDot(job)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(job.name, style = Type.strong, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(job.name, style = Type.strong, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (job.status == Status.Done && !renaming) {
+                        Icon(
+                            Icons.Default.Edit, "Ganti nama", tint = RR.Muted,
+                            modifier = Modifier.padding(start = 4.dp).size(32.dp).clip(CircleShape)
+                                .clickable(role = Role.Button) { renaming = true }.padding(7.dp),
+                        )
+                    }
+                }
                 Text(
                     statusLine(job),
                     style = Type.small.copy(color = if (job.status == Status.Failed) RR.Danger else RR.Muted),
@@ -611,7 +646,34 @@ private fun JobCard(job: DlJob, vm: MainViewModel, modifier: Modifier) {
         if (job.status.isActive || (job.hasPartial && job.status != Status.Done)) {
             FlameBar(job.overall, job.isIndeterminate && job.status.isActive)
         }
-        Actions(job, vm)
+        if (renaming) RenameRow(job.name, onCancel = { renaming = false }) {
+            vm.renameJob(job, it)
+            renaming = false
+        } else Actions(job, vm)
+    }
+}
+
+@Composable
+private fun RenameRow(current: String, onCancel: () -> Unit, onSave: (String) -> Unit) {
+    var field by remember { mutableStateOf(TextFieldValue(current, TextRange(0, current.length))) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        BasicTextField(
+            value = field,
+            onValueChange = { field = it },
+            singleLine = true,
+            textStyle = Type.body,
+            cursorBrush = SolidColor(RR.Flame),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { if (field.text.isNotBlank()) onSave(field.text) }),
+            modifier = Modifier.fillMaxWidth().focusRequester(focus).clip(RoundedCornerShape(14.dp))
+                .background(RR.NightSky).padding(horizontal = 14.dp, vertical = 13.dp),
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            SmallButton("Batal", RR.NightSky, RR.Muted, onCancel)
+            SmallButton("Simpan nama", RR.Flame, RR.NightSky) { if (field.text.isNotBlank()) onSave(field.text) }
+        }
     }
 }
 
@@ -695,11 +757,24 @@ private fun FlameBar(fraction: Float, indeterminate: Boolean) {
 @Composable
 private fun Actions(job: DlJob, vm: MainViewModel) {
     val ctx = LocalContext.current
+    var confirm by remember(job.id) { mutableStateOf(false) }
+    if (confirm) {
+        // Asked in place: the card already says which video this is.
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Hapus dari daftar saja, atau sekalian file videonya?", style = Type.small.copy(color = RR.Cream))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                SmallButton("Batal", RR.NightSky, RR.Muted) { confirm = false }
+                SmallButton("Daftar saja", RR.NightSky, RR.Cream) { vm.deleteJob(job, withFile = false) }
+                SmallButton("Hapus file", RR.Danger, RR.NightSky) { vm.deleteJob(job, withFile = true) }
+            }
+        }
+        return
+    }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
         when (job.status) {
             Status.Done -> {
                 val uri = Uri.parse(job.outputUri)
-                SmallButton("Tutup", RR.NightSky, RR.Muted) { vm.remove(job.id) }
+                SmallButton("Hapus", RR.NightSky, RR.Muted) { confirm = true }
                 SmallButton("Share", RR.NightSky, RR.Cream) { ctx.open(Media.shareIntent(uri, job.outputMime)) }
                 SmallButton("Buka", RR.Flame, RR.NightSky) { ctx.open(Media.viewIntent(uri, job.outputMime)) }
             }
@@ -716,6 +791,56 @@ private fun Context.open(i: Intent) = try {
     startActivity(i)
 } catch (_: ActivityNotFoundException) {
     Toast.makeText(this, "Gak ada aplikasi yang bisa membuka file ini", Toast.LENGTH_SHORT).show()
+}
+
+// ---------------------------------------------------------------- saved
+
+@Composable
+private fun SavedCard(s: Saved, vm: MainViewModel, modifier: Modifier) {
+    val thumb by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, s.thumb) {
+        value = s.thumb?.let { path ->
+            withContext(Dispatchers.IO) { android.graphics.BitmapFactory.decodeFile(path)?.asImageBitmap() }
+        }
+    }
+    Column(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(RR.OrbitDeck).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(104.dp, 58.dp).clip(RoundedCornerShape(12.dp)).background(RR.NightSky),
+                contentAlignment = Alignment.Center,
+            ) {
+                thumb?.let {
+                    Image(it, null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                } ?: Text(s.kind, style = Type.label.copy(color = RR.Muted))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(s.name, style = Type.strong, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(savedLine(s), style = Type.small, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            SmallButton("Hapus", RR.NightSky, RR.Muted) { vm.removeSaved(s) }
+            if (s.checked) {
+                SmallButton("Preview", RR.NightSky, RR.Cream) { vm.previewSaved(s) }
+                SmallButton("Download", RR.Flame, RR.NightSky) { vm.downloadSaved(s) }
+            } else {
+                SmallButton("Cek & preview", RR.Flame, RR.NightSky) { vm.previewSaved(s) }
+            }
+        }
+    }
+}
+
+private fun savedLine(s: Saved): String = if (!s.checked) {
+    "${s.kind} · belum dicek · ${Uri.parse(s.url).host.orEmpty().removePrefix("www.")}"
+} else {
+    listOfNotNull(
+        s.kind,
+        s.duration.takeIf { it > 0 }?.let(::fmtDuration),
+        if (s.width > 0) "${minOf(s.width, s.height)}p" else s.quality,
+        s.bytes.takeIf { it > 0 }?.let { (if (s.direct != null) "" else "± ") + fmtBytes(it) },
+    ).joinToString(" · ")
 }
 
 @Composable
@@ -759,7 +884,13 @@ internal fun Pill(text: String, bg: Color, fg: Color, modifier: Modifier = Modif
 }
 
 @Composable
-private fun PrimaryButton(text: String, enabled: Boolean, loading: Boolean = false, onClick: () -> Unit) {
+private fun PrimaryButton(
+    text: String,
+    enabled: Boolean,
+    loading: Boolean = false,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.97f else 1f, spring(stiffness = 600f), label = "press")
@@ -772,7 +903,7 @@ private fun PrimaryButton(text: String, enabled: Boolean, loading: Boolean = fal
             containerColor = RR.Flame, contentColor = RR.NightSky,
             disabledContainerColor = RR.Track, disabledContentColor = RR.Muted,
         ),
-        modifier = Modifier.fillMaxWidth().height(56.dp).graphicsLayer { scaleX = scale; scaleY = scale },
+        modifier = modifier.fillMaxWidth().height(56.dp).graphicsLayer { scaleX = scale; scaleY = scale },
     ) {
         // Only the fixed-size glyph cross-fades; the label sits outside so a width change never clips it.
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -793,6 +924,24 @@ private fun PrimaryButton(text: String, enabled: Boolean, loading: Boolean = fal
             }
             Text(text, style = Type.button)
         }
+    }
+}
+
+/** Quiet partner of [PrimaryButton]: same height and press, no fill colour fighting for attention. */
+@Composable
+private fun SecondaryButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, spring(stiffness = 600f), label = "press")
+    Box(
+        modifier.height(56.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(percent = 50))
+            .background(RR.NightSky)
+            .clickable(interaction, ripple(color = RR.Cream), role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, style = Type.button.copy(color = RR.Cream))
     }
 }
 

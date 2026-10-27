@@ -33,6 +33,7 @@ object Http {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(40, TimeUnit.SECONDS)
         .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
+        .dns(io.github.arielfikru.rabbitrocket.net.AppDns)
         .build()
         .also { it.dispatcher.maxRequestsPerHost = 16 }
 }
@@ -83,8 +84,13 @@ class HlsClient(private val headers: Map<String, String>) {
             }
         }
 
-    /** Fetches only the first bytes to tell a playlist from a direct media file. */
-    suspend fun probe(url: String): Probe = retrying {
+    /**
+     * Fetches only the first bytes to tell a playlist from a direct media file. Runs on IO as a
+     * whole: closing a half-read body drains it from the socket.
+     */
+    suspend fun probe(url: String): Probe = withContext(Dispatchers.IO) { probeOnce(url) }
+
+    private suspend fun probeOnce(url: String): Probe = retrying {
         Http.client.newCall(request(url, ByteRange(0, 4096))).await().use { r ->
             r.ensureOk()
             val type = r.header("Content-Type")?.substringBefore(';')?.trim()?.lowercase()

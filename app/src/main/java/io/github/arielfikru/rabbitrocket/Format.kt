@@ -35,6 +35,9 @@ fun statusLine(job: DlJob): String = when (job.status) {
     }
 }
 
+/** "1080p · 1920×1080"; the short side names the class, so portrait clips read right too. */
+fun fmtResolution(w: Int, h: Int): String = "${minOf(w, h)}p · ${w}×${h}"
+
 fun fmtDuration(sec: Double): String {
     val s = sec.toLong()
     val h = s / 3600

@@ -25,7 +25,17 @@ object Thumbnails {
         return (0 until COUNT).map { i -> ((i + 0.5) * n / COUNT).toInt().coerceIn(0, n - 1) }
     }
 
-    fun generate(client: HlsClient, media: Playlist.Media, dir: File): Flow<Thumb> = channelFlow {
+    /** Video dimensions as stored, swapped for rotated (portrait) recordings. */
+    private fun size(r: MediaMetadataRetriever): Pair<Int, Int>? {
+        val w = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: return null
+        val h = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: return null
+        val rot = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+        if (w <= 0 || h <= 0) return null
+        return if (rot % 180 != 0) h to w else w to h
+    }
+
+    fun generate(client: HlsClient, media: Playlist.Media, dir: File, onSize: (Int, Int) -> Unit = { _, _ -> }): Flow<Thumb> = channelFlow {
+        val sized = java.util.concurrent.atomic.AtomicBoolean(false)
         val starts = DoubleArray(media.segments.size)
         for (i in 1 until starts.size) starts[i] = starts[i - 1] + media.segments[i - 1].duration
         val isTs = media.init == null
@@ -42,7 +52,8 @@ object Thumbnails {
                             init?.let(out::write)
                             out.write(data)
                         }
-                        frame(f)?.let { send(Thumb(slot, starts[segIdx], it)) }
+                        frame(f) { w, h -> if (sized.compareAndSet(false, true)) onSize(w, h) }
+                            ?.let { send(Thumb(slot, starts[segIdx], it)) }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
@@ -59,12 +70,16 @@ object Thumbnails {
      * Frames straight from a remote file; MediaMetadataRetriever range-reads only what it needs
      * (the moov box and the sync frames near each time), so this stays light for big MP4s.
      */
-    fun generateDirect(url: String, headers: Map<String, String>, onDuration: (Double) -> Unit): Flow<Thumb> = flow {
+    fun generateDirect(
+        url: String,
+        headers: Map<String, String>,
+        onInfo: (durationSec: Double, size: Pair<Int, Int>?) -> Unit,
+    ): Flow<Thumb> = flow {
         val r = MediaMetadataRetriever()
         try {
             r.setDataSource(url, headers)
             val ms = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: return@flow
-            onDuration(ms / 1000.0)
+            onInfo(ms / 1000.0, size(r))
             for (i in 0 until COUNT) {
                 val t = (i + 0.5) * ms / COUNT
                 val bmp = runCatching {
@@ -81,10 +96,11 @@ object Thumbnails {
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun frame(f: File): Bitmap? {
+    private fun frame(f: File, onSize: (Int, Int) -> Unit): Bitmap? {
         val r = MediaMetadataRetriever()
         return try {
             r.setDataSource(f.absolutePath)
+            size(r)?.let { (w, h) -> onSize(w, h) }
             r.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 270)
                 ?: r.getFrameAtTime(-1)
         } catch (_: Exception) {
