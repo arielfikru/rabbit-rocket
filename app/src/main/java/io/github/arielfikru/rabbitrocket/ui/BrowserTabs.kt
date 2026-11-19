@@ -27,7 +27,15 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import io.github.arielfikru.rabbitrocket.hls.MediaKind
 import io.github.arielfikru.rabbitrocket.hls.MediaTypes
+import io.github.arielfikru.rabbitrocket.hls.DEFAULT_UA
+import io.github.arielfikru.rabbitrocket.hls.Http
 import io.github.arielfikru.rabbitrocket.net.AdBlock
+import io.github.arielfikru.rabbitrocket.net.LinkSkipper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
@@ -98,6 +106,10 @@ internal class Tab(val id: Long, restoreUrl: String?, restoreTitle: String?) {
     var blocked by mutableIntStateOf(0)
     /** Set for tabs a page opened; Back on their first page returns to the opener. */
     var openerId: Long? = null
+    /** A shortlink the skipper gave up on; it loads as a normal page instead of being skipped again. */
+    var skipBypass: String? = null
+    /** The shortlink being skipped right now. */
+    var skipping: String? = null
     private var lastPage: String? = null
 
     val url: String? get() = state.pageUrl ?: pendingUrl ?: state.address.ifEmpty { null }
@@ -135,6 +147,9 @@ internal object Tabs {
     private var wrapper: MutableContextWrapper? = null
     private var nextId = 1L
     private val main = Handler(Looper.getMainLooper())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    /** Opened by [openLater] before the browser was ever shown. */
+    private var pendingOpen: String? = null
 
     fun attach(activity: Context) {
         val w = wrapper
@@ -144,6 +159,43 @@ internal object Tabs {
         }
         wrapper = MutableContextWrapper(activity)
         restore(activity)
+        pendingOpen?.let { newTab(it) }
+        pendingOpen = null
+    }
+
+    /** New tab for [url], also when the browser hasn't been opened yet this run. */
+    fun openLater(url: String) {
+        if (wrapper != null) newTab(url) else pendingOpen = url
+    }
+
+    /**
+     * droplink.co shortlinks are walked in the background and the tab goes straight to the real link,
+     * skipping the ad hops and timers. Returns true when it took over the navigation. On any failure
+     * the shortlink loads as a normal page.
+     */
+    private fun skipShortlink(tab: Tab, view: WebView, url: String): Boolean {
+        if (!LinkSkipper.isShortlink(url) || tab.skipBypass == url) return false
+        if (tab.skipping == url) return true
+        tab.skipping = url
+        tab.state.address = url
+        tab.state.title = "Melewati shortlink…"
+        tab.state.started = true
+        tab.state.progress = 30
+        scope.launch {
+            val real = runCatching {
+                withContext(Dispatchers.IO) { LinkSkipper(Http.client, DEFAULT_UA).resolve(url) }
+            }.onFailure { android.util.Log.w("RabbitRocket", "shortlink skip failed", it) }.getOrNull()
+            tab.skipping = null
+            if (tab.web !== view) return@launch
+            if (real != null) {
+                view.loadUrl(real)
+            } else {
+                tab.skipBypass = url
+                wrapper?.let { Toast.makeText(it, "Shortlink tidak bisa dilewati, dibuka biasa", Toast.LENGTH_SHORT).show() }
+                view.loadUrl(url)
+            }
+        }
+        return true
     }
 
     /** Called when the activity goes away, so tabs don't keep it alive. */
@@ -255,6 +307,7 @@ internal object Tabs {
                     val scheme = request.url.scheme?.lowercase()
                     // intent:, market: and friends would leave the app; ads love them.
                     if (scheme != "http" && scheme != "https") return true
+                    if (request.isForMainFrame && skipShortlink(tab, view, request.url.toString())) return true
                     // Click-jacking overlays send the whole page to an ad network.
                     if (request.isForMainFrame && AdBlock.shouldBlock(request.url.host, pageHost(tab))) {
                         main.post { tab.blocked++ }
@@ -276,6 +329,11 @@ internal object Tabs {
                 }
 
                 override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                    // Typed, restored and app-opened loads never reach shouldOverrideUrlLoading.
+                    if (skipShortlink(tab, view, url)) {
+                        view.stopLoading()
+                        return
+                    }
                     state.pageUrl = url
                     state.address = url
                     state.started = true
@@ -283,6 +341,7 @@ internal object Tabs {
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
+                    if (tab.skipping != null) return
                     if (!docStart) view.evaluateJavascript(SNIFF_JS, null)
                     BrowserHistory.record(url, view.title?.takeIf { it != url } ?: state.title)
                     save()
@@ -309,6 +368,7 @@ internal object Tabs {
             }
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView, newProgress: Int) {
+                    if (tab.skipping != null) return
                     state.progress = newProgress
                 }
 

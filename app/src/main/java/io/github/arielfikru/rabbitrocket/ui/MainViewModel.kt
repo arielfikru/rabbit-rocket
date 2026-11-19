@@ -16,18 +16,22 @@ import io.github.arielfikru.rabbitrocket.DownloadStore
 import io.github.arielfikru.rabbitrocket.JobFrames
 import io.github.arielfikru.rabbitrocket.Notifs
 import io.github.arielfikru.rabbitrocket.Status
+import io.github.arielfikru.rabbitrocket.hls.DEFAULT_UA
 import io.github.arielfikru.rabbitrocket.hls.HlsClient
+import io.github.arielfikru.rabbitrocket.hls.Http
 import io.github.arielfikru.rabbitrocket.hls.MediaKind
 import io.github.arielfikru.rabbitrocket.hls.MediaTypes
 import io.github.arielfikru.rabbitrocket.hls.Playlist
 import io.github.arielfikru.rabbitrocket.hls.Probe
 import io.github.arielfikru.rabbitrocket.hls.Thumbnails
 import io.github.arielfikru.rabbitrocket.hls.Variant
+import io.github.arielfikru.rabbitrocket.net.LinkSkipper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -194,6 +198,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         analyzing = true
         viewModelScope.launch {
             try {
+                var u = u
+                if (LinkSkipper.isShortlink(u)) {
+                    u = withContext(Dispatchers.IO) { LinkSkipper(Http.client, DEFAULT_UA).resolve(u) }
+                    url = u
+                    // Shortlinks mostly lead to a download page, not a media file: open it in the browser.
+                    if (MediaTypes.classify(u) == null) {
+                        Tabs.openLater(u)
+                        tab = 1
+                        return@launch
+                    }
+                }
                 val client = HlsClient(draft(u).headers())
                 val probe = client.probe(u)
                 if (probe is Probe.Direct) {
