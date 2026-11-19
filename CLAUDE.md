@@ -9,9 +9,11 @@ Default target: GitHub release on `arielfikru/rabbit-rocket`, APK asset `rabbit-
 1. Bump `versionCode` / `versionName` in `app/build.gradle.kts`, add the feature to `README.md`.
 2. Build + tests (JDK 17, SDK in `local.properties` `sdk.dir=/opt/homebrew/share/android-commandlinetools`):
    `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ./gradlew testReleaseUnitTest assembleRelease`
-3. Signing: release key is `CN=Rabbit Rocket, O=arielfikru`, SHA-256 `8626182fcc63c40a369a910bd3c3b552489539f3e2ad90f3f02ce50713d475b8`,
-   read from `keystore.properties` or `~/.android/rabbitrocket-keystore.properties`. Without it the build falls back to the
-   debug key, which can't install over earlier releases. Check before releasing:
+3. Signing: since v1.5.0 the release key is `~/.android/rabbitrocket-release.jks` (alias `rabbitrocket`,
+   `CN=Rabbit Rocket, O=arielfikru`, cert SHA-256 `21f11c22782babaa441a3cbfec0d5d1c776a6c7562fca3b4bcf91f4075f99b07`),
+   read via `~/.android/rabbitrocket-keystore.properties`; password also in Keychain service `rabbitrocket-keystore`.
+   Keep a backup: losing it means users must uninstall again. (v1.0–1.4 used an older key, SHA-256 `8626182f…`, now lost.)
+   Without the properties file the build falls back to the debug key. Check before releasing:
    `$ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk`
 4. Commit on `main`, `git push`.
 5. `gh release create vX.Y.Z app/build/outputs/apk/release/app-release.apk#rabbit-rocket-vX.Y.Z.apk` with Indonesian notes
