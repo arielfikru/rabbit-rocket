@@ -16,5 +16,8 @@ Default target: GitHub release on `arielfikru/rabbit-rocket`, APK asset `rabbit-
    Without the properties file the build falls back to the debug key. Check before releasing:
    `$ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk`
 4. Commit on `main`, `git push`.
-5. `gh release create vX.Y.Z app/build/outputs/apk/release/app-release.apk#rabbit-rocket-vX.Y.Z.apk` with Indonesian notes
-   (feature list + "### Install" paragraph, like v1.4.0). Upload the asset under the name `rabbit-rocket-vX.Y.Z.apk`.
+5. Copy the APK to a file named `rabbit-rocket-vX.Y.Z.apk` first (`gh`'s `file#label` only sets a display label, the
+   asset keeps the name `app-release.apk`), then `gh release create vX.Y.Z <that file> --notes-file ...` with Indonesian
+   notes (feature list + "### Install" paragraph). Check with `gh release view --json assets`, download it, run apksigner.
+6. Before releasing a browser change, try it on the emulator: AVD `rr35` (API 35 arm64), started with
+   `$ANDROID_HOME/emulator/emulator -avd rr35 -no-window -no-audio`, then `adb install -r`, `adb shell input`, `adb exec-out screencap -p`.
