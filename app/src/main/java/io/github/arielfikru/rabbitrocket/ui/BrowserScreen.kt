@@ -245,7 +245,8 @@ fun BrowserScreen(vm: MainViewModel, visible: Boolean, modifier: Modifier = Modi
             else -> vm.tab = 0
         }
     }
-    val load = { url: String -> Tabs.webFor(tab).loadUrl(url) }
+    // A link typed again gets a fresh skip attempt, even if the last one fell back.
+    val load = { url: String -> tab.skipBypass = null; Tabs.webFor(tab).loadUrl(url) }
 
     Box(
         modifier.fillMaxSize().background(RR.NightSky)

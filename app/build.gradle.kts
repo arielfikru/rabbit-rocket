@@ -23,8 +23,8 @@ android {
         applicationId = "io.github.arielfikru.rabbitrocket"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.5.0"
+        versionCode = 7
+        versionName = "1.5.1"
     }
 
     signingConfigs {

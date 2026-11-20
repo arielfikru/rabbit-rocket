@@ -107,9 +107,9 @@ internal class Tab(val id: Long, restoreUrl: String?, restoreTitle: String?) {
     /** Set for tabs a page opened; Back on their first page returns to the opener. */
     var openerId: Long? = null
     /** A shortlink the skipper gave up on; it loads as a normal page instead of being skipped again. */
-    var skipBypass: String? = null
+    @Volatile var skipBypass: String? = null
     /** The shortlink being skipped right now. */
-    var skipping: String? = null
+    @Volatile var skipping: String? = null
     private var lastPage: String? = null
 
     val url: String? get() = state.pageUrl ?: pendingUrl ?: state.address.ifEmpty { null }
@@ -182,16 +182,20 @@ internal object Tabs {
         tab.state.started = true
         tab.state.progress = 30
         scope.launch {
-            val real = runCatching {
+            val result = runCatching {
                 withContext(Dispatchers.IO) { LinkSkipper(Http.client, DEFAULT_UA).resolve(url) }
-            }.onFailure { android.util.Log.w("RabbitRocket", "shortlink skip failed", it) }.getOrNull()
+            }.onFailure { android.util.Log.w("RabbitRocket", "shortlink skip failed", it) }
             tab.skipping = null
             if (tab.web !== view) return@launch
+            val real = result.getOrNull()
             if (real != null) {
-                view.loadUrl(real)
+                // Replace the placeholder's history entry, so Back doesn't land on it and skip again.
+                if (view.url == url) view.evaluateJavascript("location.replace(${org.json.JSONObject.quote(real)})", null)
+                else view.loadUrl(real)
             } else {
                 tab.skipBypass = url
-                wrapper?.let { Toast.makeText(it, "Shortlink tidak bisa dilewati, dibuka biasa", Toast.LENGTH_SHORT).show() }
+                val why = result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName }
+                wrapper?.let { Toast.makeText(it, "Shortlink gagal dilewati ($why), dibuka biasa", Toast.LENGTH_LONG).show() }
                 view.loadUrl(url)
             }
         }
@@ -267,6 +271,15 @@ internal object Tabs {
 
     private fun blockedResponse() = WebResourceResponse("text/plain", "utf-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
 
+    private fun skippingResponse() = WebResourceResponse(
+        "text/html", "utf-8", 200, "OK", mapOf("Cache-Control" to "no-store"),
+        ByteArrayInputStream(SKIPPING_HTML.toByteArray()),
+    )
+
+    private const val SKIPPING_HTML = "<!doctype html><meta name=viewport content='width=device-width'>" +
+        "<body style='background:#0f0c29;color:#ddd;font:16px sans-serif;display:grid;place-items:center;height:90vh'>" +
+        "Melewati shortlink…</body>"
+
     private fun pageHost(tab: Tab) = tab.state.pageUrl?.let { Uri.parse(it).host }
 
     @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
@@ -317,6 +330,15 @@ internal object Tabs {
                 }
 
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                    // The one hook that sees the shortlink itself on every path (typed, restored,
+                    // opened by the app, tapped): droplink answers 307, so later hooks only see the hop.
+                    if (request.isForMainFrame && request.method.equals("GET", true)) {
+                        val u = request.url.toString()
+                        if (LinkSkipper.isShortlink(u) && tab.skipBypass != u) {
+                            main.post { skipShortlink(tab, view, u) }
+                            return skippingResponse()
+                        }
+                    }
                     if (!request.isForMainFrame && AdBlock.shouldBlock(request.url.host, pageHost(tab))) {
                         main.post { tab.blocked++ }
                         return blockedResponse()
